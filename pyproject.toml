@@ -1,0 +1,48 @@
+[project]
+name = "agentkit"
+version = "0.1.0"
+description = "agent kit"
+authors = [{name = "shawndeng", email = "shawndeng1109@qq.com"}]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.10,<3.14.99"
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/ShawnDen-coder/agentkit"
+Repository = "https://github.com/ShawnDen-coder/agentkit"
+Documentation = "https://ShawnDen-coder.github.io/agentkit"
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+agentkit-core = { workspace = true }
+agentkit-bi = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.4",
+    "pytest-asyncio>=0.23",
+    "pytest-mock>=3.14.0",
+    "pytest-cov>=6.0.0",
+]
+
+docs = [
+    "mkdocs>=1.5.3",
+    "mkdocs-material>=9.5.3",
+    "mkdocstrings>=0.24.0",
+    "mkdocstrings-python>=1.7.5",
+    "mkdocs-gen-files>=0.5.0",
+    "pymdown-extensions>=10.7",
+    "mkdocs-literate-nav>=0.6.1",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["packages"]
+addopts = "-ra"
+
