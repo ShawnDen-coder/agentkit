@@ -14,7 +14,22 @@ shadowing ``BaseModel.schema``); it serializes to the wire key ``schema``.
 
 from __future__ import annotations
 
+from agentkit_core.auth import AllowAllAuthorizer
+from agentkit_core.auth import AuthContext
+from agentkit_core.auth import AuthenticationError
+from agentkit_core.auth import Authenticator
+from agentkit_core.auth import AuthError
+from agentkit_core.auth import AuthorizationError
+from agentkit_core.auth import Authorizer
+from agentkit_core.auth import AuthzAction
+from agentkit_core.auth import DenyAllAuthorizer
+from agentkit_core.auth import Principal
+from agentkit_core.auth import session_from_principal
 from agentkit_core.helpers import deterministic_uuid
+from agentkit_core.llm import LlmChunk
+from agentkit_core.llm import LlmResponse
+from agentkit_core.llm import LlmToolCall
+from agentkit_core.llm import ToolDef
 from agentkit_core.models import PROTOCOL_VERSION
 from agentkit_core.models import AdapterCapabilities
 from agentkit_core.models import Artifact
@@ -62,7 +77,15 @@ __all__ = [
     "PROTOCOL_VERSION",
     "STANDARD_VERBS",
     "AdapterCapabilities",
+    "AllowAllAuthorizer",
     "Artifact",
+    "AuthContext",
+    "AuthError",
+    "AuthenticationError",
+    "Authenticator",
+    "AuthorizationError",
+    "Authorizer",
+    "AuthzAction",
     "BaseSSE",
     "Citation",
     "Component",
@@ -78,18 +101,24 @@ __all__ = [
     "CopilotPromptSuggestions",
     "CopilotResponse",
     "CopilotStatusUpdate",
+    "DenyAllAuthorizer",
     "ErrorArtifact",
     "Field",
+    "LlmChunk",
     "LlmClient",
+    "LlmResponse",
+    "LlmToolCall",
     "MarkdownArtifact",
     "Message",
     "MessageRole",
     "Orchestrator",
+    "Principal",
     "QueryRequest",
     "Refinement",
     "SessionContext",
     "TableArtifact",
     "TextArtifact",
+    "ToolDef",
     "VerbCategory",
     "VerbHandler",
     "VerbSpec",
@@ -97,4 +126,5 @@ __all__ = [
     "deterministic_uuid",
     "human_message",
     "query",
+    "session_from_principal",
 ]

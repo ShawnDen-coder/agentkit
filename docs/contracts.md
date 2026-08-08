@@ -1,10 +1,24 @@
-# AgentKit Frozen Contracts (M1)
+# AgentKit Frozen Contracts
 
-> M1 freezes the two narrow waists. This document enumerates the frozen surface and
-> the versioning policy. Changes to anything listed here require a version bump
-> (see [Versioning](#versioning)) and an update to this file + `agentkit-architecture.md`.
+> The two narrow waists + supporting contracts. This document enumerates the frozen
+> surface and the versioning policy. Changes to anything listed here require a version
+> bump (see [Versioning](#versioning)) and an update to this file + `agentkit-architecture.md`.
 
-`PROTOCOL_VERSION = "0.1.0"` (defined in `agentkit_core`).
+`PROTOCOL_VERSION = "0.2.0"` (defined in `agentkit_core`).
+
+> **0.2.0 (M2) changes** (additive, backward-compatible):
+> - `SessionContext.auth_token: SecretStr | None` (`exclude=True`) - BI auth token for
+>   Option B backend-fetch. Transported via HTTP `Authorization` header (FastAPI layer
+>   extracts + injects), never the request body; never serialized into `model_dump()` /
+>   JSON / logs. Closes the §5.1-vs-§10 gap.
+> - `LlmClient` Protocol tightened: `call -> LlmResponse`, `stream -> AsyncIterator[LlmChunk]`,
+>   param `functions` -> `tools: list[ToolDef] | None`. New provider-neutral types in
+>   `agentkit_core.llm`: `ToolDef`, `LlmChunk`, `LlmToolCall`, `LlmResponse`. Lets the
+>   orchestrator route tool calls without depending on any LLM SDK.
+>
+> **0.1.0 (M1)**: initial freeze - the 6 SSE events, `QueryRequest`/`Message`/`SessionContext`,
+> `Component`/`ComponentSchema` envelope, `ComponentAdapter` Protocol, 11-verb catalogue,
+> testing DSL.
 
 ## Narrow waist ② — SSE protocol
 
@@ -36,7 +50,11 @@ class-level discriminator (not duplicated inside `data`). `data` is
   state lives in `messages`.
 - `Message`: `role` ∈ `{human, tool, assistant, system}` drives the state machine
   (§6.3). `role=tool` only for frontend UI-action results (carries `name` + `data`).
-- `SessionContext`: `user_identity`, `user_permissions[]`, `workspace_id`, `trace_id`.
+- `SessionContext`: `user_identity`, `user_permissions[]`, `workspace_id`, `trace_id`,
+  `auth_token: SecretStr | None` (0.2.0, `exclude=True`). The auth token travels via the
+  HTTP `Authorization` header (extracted + injected by the FastAPI layer), NOT the body;
+  it is never serialized (excluded from `model_dump()` / JSON / logs). Adapters read it
+  via `ctx.auth_token.get_secret_value()`.
 
 ## Narrow waist ① — ComponentAdapter contract
 
@@ -99,18 +117,50 @@ live `VerbRegistry` (binding handlers) is wired in M2. BI aliases
 (`get_widget_data` → `get_component_data`, etc.) and `export_artifact` are declared in
 `agentkit_bi`.
 
-## What is NOT in M1 (deferred)
+## Authentication & authorization seam (user-implemented)
 
-- `Orchestrator` / `LlmClient` — Protocol only; impls in M2 (`StatelessOrchestrator`,
-  `LangChainLlmClient`).
-- Live `VerbRegistry`, FastAPI app, SSE endpoint — M2.
-- Real adapter (Superset) — M3. Multi-hop (`MAX_HOPS`) — M4. Skills — M5. MCP — M6.
-- **Auth token transport (open gap §5.1 vs §10)**: `SessionContext` does not yet model
-  the BI auth token required for Option B backend-fetch. Deferred to M2 (L3 integration
-  layer); may extend `SessionContext` (minor version bump). Adapters must not assume a
-  token field exists yet.
-- `BiSemanticModel.calculated_fields` is optional (default `None`) pending §14 Q1
+Auth runs *before* a request enters the SSE/orchestrator path, so it is **not** part of
+either narrow waist and does **not** bump `PROTOCOL_VERSION`. The contracts live in
+`agentkit_core.auth` and are **transport-agnostic** (no HTTP type) so one implementation
+serves both the web profile (FastAPI) and the DCC profile (PySide/Maya host session).
+
+Users plug in their own mechanism (JWT, OAuth2, API-key, mTLS, studio SSO, ...) by
+implementing two Protocols:
+
+- **`Authenticator.authenticate(context: AuthContext) -> Principal`** (async) - verifies
+  the caller and returns a `Principal` (`user_identity`, `user_permissions`, delegated
+  `auth_token: SecretStr`, `workspace_id`, `metadata`). Raise `AuthenticationError` (-> 401).
+- **`Authorizer.authorize(principal, action: AuthzAction) -> None`** (async) - per-verb
+  RLS/scope check; return to allow, raise `AuthorizationError` (-> 403). `AuthzAction`
+  carries `verb` + `component_id` + `args` for field/row-level decisions.
+
+Supporting types: `AuthContext` (headers/query/cookies/peer bag; `header()` is
+case-insensitive), `Principal` (frozen; `auth_token` is `exclude=True` so it is never
+serialized), `AuthzAction` (frozen). Trivial dev/test impls: `AllowAllAuthorizer`,
+`DenyAllAuthorizer` (a header-trusting `Authenticator` ships in `agentkit-mock-app`).
+
+The app layer bridges a verified `Principal` onto the wire `SessionContext` via
+`session_from_principal(principal, *, trace_id, workspace_id=None)`. `SessionContext` is
+unchanged (still the RLS passthrough vehicle); the §10 invariants - no service account,
+short-lived/unlogged/uncached token - are enforced by the *implementations*, not the seam.
+
+## What is NOT yet implemented (deferred)
+
+- `Orchestrator` / `LlmClient` - Protocol only in 0.1.0; `LlmClient` tightened in 0.2.0.
+  `LangChainLlmClient` landed in `agentkit-llm-langchain` (M2); `StatelessOrchestrator`
+  (in `agentkit-runtime`) still pending.
+- Live `VerbRegistry`, FastAPI app, SSE endpoint - M2. Packages `agentkit-runtime`,
+  `agentkit-mock-app`, `agentkit-cli` are scaffolded (M2 in progress); the auth seam
+  (`Authenticator`/`Authorizer`/`Principal`/`AuthContext`/`AuthzAction`) is frozen in
+  `agentkit_core.auth` (0.2.0+, no `PROTOCOL_VERSION` bump - it is above the waists).
+- Real adapter (Superset) - M3. Multi-hop (`MAX_HOPS`) - M4. Skills - M5. MCP - M6.
+- `BiSemanticModel.calculated_fields` is optional (default `None`) pending the §14 Q1
   resolution at M3 (Superset + Metabase + Looker comparison).
+
+> Auth-token transport (formerly the §5.1-vs-§10 open gap) is resolved in 0.2.0:
+> `SessionContext.auth_token` via `Authorization` header, `exclude=True`. The full
+> auth/authz seam (how that token + identity + permissions are derived) is the
+> user-implemented `Authenticator`/`Authorizer` above.
 
 ## Versioning
 

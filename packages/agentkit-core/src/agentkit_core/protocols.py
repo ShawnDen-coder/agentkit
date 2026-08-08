@@ -16,6 +16,9 @@ from typing import Any
 from typing import Protocol
 from typing import runtime_checkable
 
+from agentkit_core.llm import LlmChunk
+from agentkit_core.llm import LlmResponse
+from agentkit_core.llm import ToolDef
 from agentkit_core.models import AdapterCapabilities
 from agentkit_core.models import BaseSSE
 from agentkit_core.models import Component
@@ -85,25 +88,30 @@ class Orchestrator(Protocol):
 class LlmClient(Protocol):
     """LLM call layer. Providers swap via env; agent code is provider-agnostic (§6.4).
 
-    ``stream`` is an async generator yielding chunks / function-call requests;
-    ``call`` is a coroutine returning a full response. The M2 default impl wraps a
-    langchain ChatModel.
+    Two methods map to the Option B two-phase loop:
+      - ``call`` (Phase 1, non-streaming, with tools): returns a ``LlmResponse`` whose
+        ``tool_calls`` the orchestrator routes (backend sync vs frontend FunctionCall).
+      - ``stream`` (Phase 2, streaming, usually without tools): yields ``LlmChunk``
+        text deltas for the final answer.
+
+    The M2 default impl (agentkit-llm-langchain) wraps a langchain ChatModel and
+    converts between these provider-neutral types and langchain's own.
     """
 
     def stream(
         self,
         messages: list[Any],
-        functions: list[dict[str, Any]] | None = None,
-    ) -> AsyncIterator[Any]:
-        """Yield streamed chunks / function-call requests (async generator)."""
+        tools: list[ToolDef] | None = None,
+    ) -> AsyncIterator[LlmChunk]:
+        """Yield streamed text chunks (async generator). Phase 2 final answer."""
         ...
 
     async def call(
         self,
         messages: list[Any],
-        functions: list[dict[str, Any]] | None = None,
-    ) -> Any:
-        """Return a full (non-streaming) response."""
+        tools: list[ToolDef] | None = None,
+    ) -> LlmResponse:
+        """Return a full response (Phase 1: with tools to obtain tool_calls)."""
         ...
 
 

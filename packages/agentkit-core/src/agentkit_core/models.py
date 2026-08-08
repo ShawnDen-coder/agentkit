@@ -22,6 +22,7 @@ from typing import Literal
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field as PydanticField
+from pydantic import SecretStr
 from pydantic import SerializeAsAny
 
 
@@ -54,7 +55,7 @@ __all__ = [
     "TextArtifact",
 ]
 
-PROTOCOL_VERSION = "0.1.0"
+PROTOCOL_VERSION = "0.2.0"
 
 
 # ---------------------------------------------------------------------------
@@ -305,11 +306,14 @@ MessageRole = Literal["human", "tool", "assistant", "system"]
 
 
 class SessionContext(BaseModel):
-    """Carries user identity + permissions; the RLS passthrough vehicle.
+    """Carries user identity + permissions + BI auth token; the RLS passthrough vehicle.
 
-    Open gap (§5.1 vs §10): the BI auth token for Option B backend-fetch is NOT
-    modelled here yet. Token transport is deferred to M2 (L3 integration layer) and
-    may extend this contract (minor version bump). See docs/contracts.md.
+    ``auth_token`` is the user's BI token for Option B backend-fetch (the orchestrator
+    calls the adapter on the user's behalf). Transported via HTTP ``Authorization``
+    header (extracted by the FastAPI layer), NOT the request body. It is ``SecretStr``
+    with ``exclude=True`` so it is never serialized into ``model_dump()`` / JSON / logs
+    (§10: short-lived, not logged/cached, transport-encrypted, scoped to the workspace).
+    Adapters read it via ``ctx.auth_token.get_secret_value()``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -318,6 +322,7 @@ class SessionContext(BaseModel):
     user_permissions: list[str] = PydanticField(default_factory=list)
     workspace_id: str
     trace_id: str
+    auth_token: SecretStr | None = PydanticField(default=None, exclude=True)
 
 
 class Message(BaseModel):
