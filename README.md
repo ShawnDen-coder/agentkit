@@ -22,7 +22,7 @@ uv workspace; packages live under `packages/`.
 
 | Package | Description | Milestone |
 |---------|-------------|-----------|
-| `agentkit-core` | Domain-neutral protocol core: SSE 6 events, `Component`/`ComponentSchema` envelope, `ComponentAdapter` Protocol, verb catalogue, testing DSL | M1 ✅ |
+| `agentkit-protocol` | Domain-neutral protocol core: SSE 6 events, `Component`/`ComponentSchema` envelope, `ComponentAdapter` Protocol, verb catalogue, testing DSL | M1 ✅ |
 | `agentkit-bi` | BI profile: `BiSemanticModel`, `Widget`, `WidgetData`, `ChartArtifact`, `BiAdapter` base, BI prompt builder | M1 ✅ |
 
 ### Development

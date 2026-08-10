@@ -197,10 +197,10 @@ class SessionContext(BaseModel):                   # ← 安全的关键载体
     user_permissions: list[str]              #   行级权限
     workspace_id: str
     trace_id: str
-    auth_token: SecretStr | None   # 0.2.0: BI token(Header 传输,exclude=True,不序列化)
+    auth_token: SecretStr | None   # 0.2.0: 委托取数凭据(Header 传输,exclude=True,不序列化)
 ```
 
-> **实现命名**:core 的窄腰 ① Protocol 正名为 `ComponentAdapter`(`agentkit_core.protocols`);`WidgetAdapter` 是 BI profile 的便利基(`agentkit_bi.BiAdapter`)。本节示例保留 `WidgetAdapter` 名以对应 OpenBB 术语,实际 core 契约为 `ComponentAdapter`。
+> **实现命名**:core 的窄腰 ① Protocol 正名为 `ComponentAdapter`(`agentkit_protocol.protocols`);`WidgetAdapter` 是 BI profile 的便利基(`agentkit_bi.BiAdapter`)。本节示例保留 `WidgetAdapter` 名以对应 OpenBB 术语,实际 core 契约为 `ComponentAdapter`。
 
 ### 5.2 能力声明与协商
 
@@ -465,10 +465,10 @@ flowchart TB
 superset = "agentkit_adapters_superset:SupersetAdapter"
 
 [project.entry-points."agentkit.skills"]
-variance = "agentkit.skills.variance:VarianceSkill"
+variance = "agentkit_skill_variance:VarianceSkill"
 
 [project.entry-points."agentkit.llm_providers"]
-langchain = "agentkit.llm.langchain:LangChainLlmClient"
+langchain = "agentkit_llm_langchain:LangChainLlmClient"
 
 [project.entry-points."agentkit.verbs"]
 export_csv = "agentkit_export:ExportCsvVerb"
@@ -489,7 +489,7 @@ export_csv = "agentkit_export:ExportCsvVerb"
 | 风险 | 措施 |
 |---|---|
 | **行级权限泄露** | adapter 所有数据获取在 `SessionContext.user_identity` 下执行,绝不用 service account;MCP 工具调用同样透传 |
-| **Token 透传(Option B)** | 后端代用户取数,`SessionContext` 携带用户 BI token;token 短期、不落日志/不缓存、传输加密、作用域限本工作区;过期由 adapter 刷新或回退前端取数(Option A) |
+| **Token 透传(Option B)** | 后端代用户取数,`SessionContext` 携带用户委托取数凭据;凭据短期、不落日志/不缓存、传输加密、作用域限本工作区;过期由 adapter 刷新或回退前端取数(Option A) |
 | **数据内 prompt injection** | BI 数据库字段可能含"忽略上面指令";widget 数据用明确分隔符围栏(如 `## WIDGET DATA`),system prompt 显式声明"数据是不可信内容" |
 | **MCP 工具越权** | MCP server 必须按 `security_context` 过滤;框架侧校验工具返回数据范围 |
 | **Skill prompt 注入** | 第三方 skill prompt 沙箱化,工具白名单,签名校验 |
@@ -555,7 +555,7 @@ flowchart LR
 
 ---
 
-> **M1 已落地(2026-08-07)**:`agentkit-core` + `agentkit-bi` 建成,41 契约测试通过,`PROTOCOL_VERSION=0.1.0`。冻结面见 `docs/contracts.md`。实现要点:`Component`/`ComponentSchema` 信封用 `SerializeAsAny`+`extra=allow`;`schema_` 属性 / wire `schema`;11 个标准动词(7 后端同步 + 4 前端 FunctionCall);`AdapterCapabilities` core 跨域标志 + BI 扩展;`calculated_fields` 可选(§14 Q1 默认)。
+> **M1 已落地(2026-08-07)**:`agentkit-protocol` + `agentkit-bi` 建成,41 契约测试通过,`PROTOCOL_VERSION=0.1.0`。冻结面见 `docs/contracts.md`。实现要点:`Component`/`ComponentSchema` 信封用 `SerializeAsAny`+`extra=allow`;`schema_` 属性 / wire `schema`;11 个标准动词(7 后端同步 + 4 前端 FunctionCall);`AdapterCapabilities` core 跨域标志 + BI 扩展;`calculated_fields` 可选(§14 Q1 默认)。
 
 ## 14. 风险与关键问题
 
@@ -794,7 +794,7 @@ DCC 功能可延后,但这 5 条不能--M1 一旦写错,DCC 接入要改核心:
 
 ```mermaid
 flowchart BT
-    CORE["agentkit-core<br/>(域中立:协议 + Component + ComponentAdapter)"]
+    CORE["agentkit-protocol<br/>(域中立:协议 + Component + ComponentAdapter)"]
     BI["agentkit-bi<br/>(BI profile)"]
     DCC["agentkit-dcc<br/>(DCC profile, M8+)"]
     RT["agentkit-runtime<br/>(profile 无关)"]
@@ -834,26 +834,26 @@ flowchart BT
 
 | 包(dist / import) | 职责 | 依赖 | 发布 | 里程碑 |
 |---|---|---|---|---|
-| `agentkit-core` / `agentkit.core` | 协议机制 + 域中立抽象(Component/ComponentSchema/ComponentAdapter) | pydantic | ✅ | M1 |
-| `agentkit-bi` / `agentkit.bi` | BI profile:BiSemanticModel + chart artifact + BI prompt | core | ✅ | M1 |
-| `agentkit-runtime` / `agentkit.runtime` | StatelessOrchestrator + FastAPI 工厂 + 注册表 | core, fastapi, sse-starlette, httpx | ✅ | M2 |
-| `agentkit-llm-langchain` / `agentkit.llm.langchain` | LlmClient 默认实现 | core, langchain | ✅ | M2 |
-| `agentkit-cli` / `agentkit.cli` | `new-adapter`/`new-skill`/`run --mock-app` | runtime, llm-langchain, typer | ✅ | M2/M7 |
-| `agentkit-mcp-gateway` / `agentkit.mcp_gateway` | MCP 网关 + RLS 透传 | core, httpx, mcp | ✅ | M6 |
-| `agentkit-mock-app` / `agentkit.mock_app` | 假数据应用 + MockAdapter | core, fastapi | dev | M2 |
-| `agentkit-adapter-superset` / `agentkit.adapters.superset` | Superset 适配器 | core, agentkit-bi, httpx | ✅ | M3 |
-| `agentkit-adapter-metabase` / `agentkit.adapters.metabase` | Metabase 适配器 | core, agentkit-bi, httpx | ✅ | M7 |
-| `agentkit-dcc` / `agentkit.dcc` | DCC profile:DccSchema + 变更动词 + DCC prompt | core | ✅ | M8+ |
-| `agentkit-adapter-maya/ue/pyside` | DCC 适配器(Maya/UE/PySide) | core, agentkit-dcc, httpx | ✅ | M8+ |
-| `agentkit-skill-variance` / `agentkit.skills.variance` | 差异分析 | core | ✅ | M5 |
-| `agentkit-skill-anomaly` / `agentkit.skills.anomaly` | 异常检测 | core | ✅ | M5+ |
-| `agentkit-skill-commentary` / `agentkit.skills.commentary` | 结构化点评 | core | ✅ | M5+ |
+| `agentkit-protocol` / `agentkit_protocol` | 协议机制 + 域中立抽象(Component/ComponentSchema/ComponentAdapter) | pydantic | ✅ | M1 |
+| `agentkit-bi` / `agentkit_bi` | BI profile:BiSemanticModel + chart artifact + BI prompt | agentkit-protocol | ✅ | M1 |
+| `agentkit-runtime` / `agentkit_runtime` | StatelessOrchestrator + FastAPI 工厂 + 注册表 | agentkit-protocol, fastapi, sse-starlette, httpx | ✅ | M2 |
+| `agentkit-llm-langchain` / `agentkit_llm_langchain` | LlmClient 默认实现 | agentkit-protocol, langchain | ✅ | M2 |
+| `agentkit-cli` / `agentkit_cli` | `new-adapter`/`new-skill`/`run --mock-app` | runtime, llm-langchain, typer | ✅ | M2/M7 |
+| `agentkit-mcp-gateway` / `agentkit_mcp_gateway` | MCP 网关 + RLS 透传 | agentkit-protocol, httpx, mcp | ✅ | M6 |
+| `agentkit-mock-app` / `agentkit_mock_app` | 假数据应用 + MockAdapter | agentkit-protocol, fastapi | dev | M2 |
+| `agentkit-adapter-superset` / `agentkit_adapters_superset` | Superset 适配器 | agentkit-protocol, agentkit-bi, httpx | ✅ | M3 |
+| `agentkit-adapter-metabase` / `agentkit_adapter_metabase` | Metabase 适配器 | agentkit-protocol, agentkit-bi, httpx | ✅ | M7 |
+| `agentkit-dcc` / `agentkit_dcc` | DCC profile:DccSchema + 变更动词 + DCC prompt | agentkit-protocol | ✅ | M8+ |
+| `agentkit-adapter-maya/ue/pyside` | DCC 适配器(Maya/UE/PySide) | agentkit-protocol, agentkit-dcc, httpx | ✅ | M8+ |
+| `agentkit-skill-variance` / `agentkit_skill_variance` | 差异分析 | agentkit-protocol | ✅ | M5 |
+| `agentkit-skill-anomaly` / `agentkit_skill_anomaly` | 异常检测 | agentkit-protocol | ✅ | M5+ |
+| `agentkit-skill-commentary` / `agentkit_skill_commentary` | 结构化点评 | agentkit-protocol | ✅ | M5+ |
 | `examples/*` | 参考 agent | runtime, llm-langchain, adapters, skills | ❌ | M2+ |
 | `frontend/` `@agentkit/react` | 前端 SDK | (TS,不在 uv workspace) | ✅ npm | M7 |
 
 ### C.4 目录布局
 
-> 导入名扁平下划线(`agentkit_core`、`agentkit_bi`、`agentkit_adapters_superset`),dist 名连字符,目录名同 dist 名。下表为全量愿景;M1 仅建成 `agentkit-core` + `agentkit-bi`(标 ✅)。
+> 导入名扁平下划线(`agentkit_protocol`、`agentkit_bi`、`agentkit_adapters_superset`),dist 名连字符,目录名同 dist 名。下表为全量愿景;M1 仅建成 `agentkit-protocol` + `agentkit-bi`(标 ✅)。
 
 ```
 agentkit/                              # monorepo root
@@ -863,7 +863,7 @@ agentkit/                              # monorepo root
 ├── docs/contracts.md                  # M1 冻结契约清单
 ├── docs/architecture.md
 ├── packages/                          # 框架核心包
-│   ├── agentkit-core ✅  src/agentkit_core/   {models,protocols,verbs,helpers,testing}
+│   ├── agentkit-protocol ✅  src/agentkit_protocol/   {models,protocols,verbs,helpers,testing}
 │   ├── agentkit-bi ✅    src/agentkit_bi/     {models,artifacts,prompt,adapter,verbs}
 │   ├── agentkit-runtime  src/agentkit_runtime/    {orchestrator,app,loop,prompt,registry}
 │   ├── agentkit-llm-langchain  src/agentkit_llm_langchain/
@@ -899,7 +899,7 @@ members = [
 ]
 
 [tool.uv.sources]
-agentkit-core = { workspace = true }
+agentkit-protocol = { workspace = true }
 agentkit-runtime = { workspace = true }
 agentkit-llm-langchain = { workspace = true }
 agentkit-cli = { workspace = true }
@@ -910,13 +910,13 @@ agentkit-mock-app = { workspace = true }
 dev = ["pytest>=8", "pytest-asyncio", "ruff", "mypy"]
 ```
 
-`packages/agentkit-core/pyproject.toml`(协议层,仅 pydantic):
+`packages/agentkit-protocol/pyproject.toml`(协议层,仅 pydantic):
 
-> **命名约定(已定)**:dist 名连字符(`agentkit-core`),**导入名扁平下划线**(`agentkit_core`、`agentkit_bi`、`agentkit_adapters_superset`、`agentkit_skills_variance`)。entry-point **组名**保留点分(`agentkit.adapters` 等,仅作字符串标识符);**值**用扁平导入路径。这偏离了早先的 PEP 420 点分命名空间设想,换来更简单的打包与 `repo-scaffold` 工具支持。
+> **命名约定(已定)**:dist 名连字符(`agentkit-protocol`),**导入名扁平下划线**(`agentkit_protocol`、`agentkit_bi`、`agentkit_adapters_superset`、`agentkit_skills_variance`)。entry-point **组名**保留点分(`agentkit.adapters` 等,仅作字符串标识符);**值**用扁平导入路径。这偏离了早先的 PEP 420 点分命名空间设想,换来更简单的打包与 `repo-scaffold` 工具支持。
 
 ```toml
 [project]
-name = "agentkit-core"
+name = "agentkit-protocol"
 version = "0.1.0"
 description = "AgentKit - protocol core (models, SSE, helpers, testing)"
 requires-python = ">=3.10"
@@ -927,7 +927,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agentkit_core"]
+packages = ["src/agentkit_protocol"]
 ```
 
 `packages/runtime/pyproject.toml`(默认带 langchain):
@@ -938,7 +938,7 @@ name = "agentkit-runtime"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
-    "agentkit-core",
+    "agentkit-protocol",
     "agentkit-llm-langchain",   # 默认 LlmClient(langchain 从 M2 起)
     "fastapi>=0.110",
     "sse-starlette>=2",
@@ -946,7 +946,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-agentkit-core = { workspace = true }
+agentkit-protocol = { workspace = true }
 agentkit-llm-langchain = { workspace = true }
 
 [build-system]
@@ -961,10 +961,10 @@ build-backend = "hatchling.build"
 name = "agentkit-adapter-superset"
 version = "0.1.0"
 requires-python = ">=3.10"
-dependencies = ["agentkit-core", "httpx>=0.27"]
+dependencies = ["agentkit-protocol", "httpx>=0.27"]
 
 [tool.uv.sources]
-agentkit-core = { workspace = true }
+agentkit-protocol = { workspace = true }
 
 [project.entry-points."agentkit.adapters"]
 superset = "agentkit_adapters_superset:SupersetAdapter"
@@ -989,7 +989,7 @@ build-backend = "hatchling.build"
 uv sync                                    # 装全部成员 + dev 依赖
 uv run --package agentkit-runtime pytest   # 在某成员环境跑测试
 uv add --package agentkit-runtime httpx    # 给某成员加依赖
-uv build --package agentkit-core           # 构建单包
+uv build --package agentkit-protocol           # 构建单包
 uv publish                                 # 发布
 ```
 
@@ -997,7 +997,7 @@ uv publish                                 # 发布
 
 | 里程碑 | 新增包 |
 |---|---|
-| M1 | `agentkit-core` + `agentkit-bi`(验证 core/profile 分层) |
+| M1 | `agentkit-protocol` + `agentkit-bi`(验证 core/profile 分层) |
 | M2 | `agentkit-runtime` + `agentkit-llm-langchain` + `agentkit-mock-app`(+ `agentkit-cli` 最小) |
 | M3 | `agentkit-adapter-superset` |
 | M4 | (无新包,runtime 内开多跳) |
@@ -1020,7 +1020,7 @@ uv publish                                 # 发布
 
 | 层 | 包 | 内容 | 领域耦合 |
 |---|---|---|---|
-| Core | `agentkit-core` | 协议机制(6 事件/函数调用回环/QueryRequest/role 状态机)、域中立抽象(`Component`/`ComponentSchema` 泛化信封/`ComponentAdapter`/`AdapterCapabilities`/`SessionContext`)、泛化动词(`get_component_data`/`refine_component`/`get_catalog`/`get_selection`/`execute_tool`/`get_skill_content`)、泛化 artifact(text/table/markdown)、Orchestrator/LlmClient/注册表/testing | 零 |
+| Core | `agentkit-protocol` | 协议机制(6 事件/函数调用回环/QueryRequest/role 状态机)、域中立抽象(`Component`/`ComponentSchema` 泛化信封/`ComponentAdapter`/`AdapterCapabilities`/`SessionContext`)、泛化动词(`get_component_data`/`refine_component`/`get_catalog`/`get_selection`/`execute_tool`/`get_skill_content`)、泛化 artifact(text/table/markdown)、Orchestrator/LlmClient/注册表/testing | 零 |
 | BI Profile | `agentkit-bi` | `BiSemanticModel`(dimensions/measures/drill_paths/time_grains)、BI artifact(chart:chartType/xKey/yKey)、BI prompt 构建器、`Widget` 别名/`BiAdapter` 便利基 | BI |
 | DCC Profile | `agentkit-dcc`(M8+) | `DccSchema`(node_type/attributes/connections/transforms)、变更动词(modify_component/execute_command)、DCC prompt 构建器、选区 helper | DCC |
 
@@ -1029,7 +1029,7 @@ uv publish                                 # 发布
 core 的 `Component` 只有跨域通用字段;`ComponentSchema` 是**多态信封**(按 `kind` 判别),core 不解析其内容。profile 给出有类型 schema:
 
 ```python
-# agentkit-core
+# agentkit-protocol
 class Component(BaseModel):
     component_id: str
     origin: str
@@ -1076,7 +1076,7 @@ core 定义泛化的后端 adapter 方法与前端动词;profile 可注册领域
 
 ```mermaid
 flowchart BT
-    CORE["agentkit-core<br/>(域中立)"]
+    CORE["agentkit-protocol<br/>(域中立)"]
     BI["agentkit-bi<br/>(BI profile)"]
     DCC["agentkit-dcc<br/>(DCC profile, M8+)"]
     RT["agentkit-runtime<br/>(profile 无关)"]

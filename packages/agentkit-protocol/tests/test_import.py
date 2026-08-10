@@ -5,4 +5,4 @@ import importlib
 
 def test_import_package():
     """Test package import."""
-    importlib.import_module("agentkit_core")
+    importlib.import_module("agentkit_protocol")

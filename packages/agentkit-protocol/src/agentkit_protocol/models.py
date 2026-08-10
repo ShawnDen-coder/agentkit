@@ -1,10 +1,10 @@
-"""agentkit-core protocol models: the two narrow waists, frozen.
+"""agentkit-protocol protocol models: the two narrow waists, frozen.
 
 Freezes:
   * Narrow waist ② (SSE protocol) - the 6 copilot events + QueryRequest/Message/SessionContext.
   * Narrow waist ① (adapter contract) base types - Component / ComponentSchema envelope /
     ComponentCapabilities / AdapterCapabilities. The ComponentAdapter Protocol itself
-    lives in :mod:`agentkit_core.protocols`.
+    lives in :mod:`agentkit_protocol.protocols`.
 
 Core is domain-neutral. Domain schemas (BiSemanticModel, DccSchema) and artifacts
 (chart) live in profile packages (agentkit-bi, agentkit-dcc). Core NEVER parses the
@@ -306,10 +306,10 @@ MessageRole = Literal["human", "tool", "assistant", "system"]
 
 
 class SessionContext(BaseModel):
-    """Carries user identity + permissions + BI auth token; the RLS passthrough vehicle.
+    """Carries user identity + permissions + a delegated backend-fetch credential; the RLS passthrough vehicle.
 
-    ``auth_token`` is the user's BI token for Option B backend-fetch (the orchestrator
-    calls the adapter on the user's behalf). Transported via HTTP ``Authorization``
+    ``auth_token`` is the user's delegated credential for Option B backend-fetch (the
+    orchestrator calls the adapter on the user's behalf). Transported via HTTP ``Authorization``
     header (extracted by the FastAPI layer), NOT the request body. It is ``SecretStr``
     with ``exclude=True`` so it is never serialized into ``model_dump()`` / JSON / logs
     (§10: short-lived, not logged/cached, transport-encrypted, scoped to the workspace).

@@ -31,6 +31,7 @@ select = [
 [lint.isort]
 force-single-line = true
 lines-after-imports = 2
+known-first-party = ["agentkit_protocol"]
 
 [lint.pydocstyle]
 convention = "google"

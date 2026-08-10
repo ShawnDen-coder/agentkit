@@ -10,17 +10,17 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
-from agentkit_core.models import Artifact
-from agentkit_core.models import BaseSSE
-from agentkit_core.models import Citation
-from agentkit_core.models import CopilotCitationCollection
-from agentkit_core.models import CopilotFunctionCall
-from agentkit_core.models import CopilotMessageArtifact
-from agentkit_core.models import CopilotMessageChunk
-from agentkit_core.models import CopilotPromptSuggestions
-from agentkit_core.models import Message
-from agentkit_core.models import QueryRequest
-from agentkit_core.models import SessionContext
+from agentkit_protocol.models import Artifact
+from agentkit_protocol.models import BaseSSE
+from agentkit_protocol.models import Citation
+from agentkit_protocol.models import CopilotCitationCollection
+from agentkit_protocol.models import CopilotFunctionCall
+from agentkit_protocol.models import CopilotMessageArtifact
+from agentkit_protocol.models import CopilotMessageChunk
+from agentkit_protocol.models import CopilotPromptSuggestions
+from agentkit_protocol.models import Message
+from agentkit_protocol.models import QueryRequest
+from agentkit_protocol.models import SessionContext
 
 
 __all__ = ["CopilotResponse", "collect_stream", "human_message", "query"]

@@ -16,17 +16,17 @@ from typing import Any
 from typing import Protocol
 from typing import runtime_checkable
 
-from agentkit_core.llm import LlmChunk
-from agentkit_core.llm import LlmResponse
-from agentkit_core.llm import ToolDef
-from agentkit_core.models import AdapterCapabilities
-from agentkit_core.models import BaseSSE
-from agentkit_core.models import Component
-from agentkit_core.models import ComponentData
-from agentkit_core.models import ComponentSchema
-from agentkit_core.models import QueryRequest
-from agentkit_core.models import Refinement
-from agentkit_core.models import SessionContext
+from agentkit_protocol.llm import LlmChunk
+from agentkit_protocol.llm import LlmResponse
+from agentkit_protocol.llm import ToolDef
+from agentkit_protocol.models import AdapterCapabilities
+from agentkit_protocol.models import BaseSSE
+from agentkit_protocol.models import Component
+from agentkit_protocol.models import ComponentData
+from agentkit_protocol.models import ComponentSchema
+from agentkit_protocol.models import QueryRequest
+from agentkit_protocol.models import Refinement
+from agentkit_protocol.models import SessionContext
 
 
 __all__ = ["ComponentAdapter", "LlmClient", "Orchestrator", "VerbHandler"]
@@ -47,6 +47,14 @@ class ComponentAdapter(Protocol):
 
     async def list_components(self, ctx: SessionContext) -> list[Component]:
         """Return the catalog of available components (verb: get_catalog)."""
+        ...
+
+    async def get_selection(self, ctx: SessionContext) -> ComponentData:
+        """Return the user's current selection in the host tool (verb: get_selection).
+
+        A polymorphic ``ComponentData`` envelope: BI profiles carry the primary widget
+        reference; DCC profiles carry the selected scene nodes/actors/QObjects. RLS via ctx.
+        """
         ...
 
     async def get_component(self, ctx: SessionContext, component_id: str) -> Component:

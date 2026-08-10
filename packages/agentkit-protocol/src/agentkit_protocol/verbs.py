@@ -13,6 +13,7 @@ VerbRegistry (binding handlers) is wired in M2 (agentkit-runtime).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 from typing import Literal
 
@@ -20,8 +21,21 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field as PydanticField
 
+from agentkit_protocol.llm import ToolDef
+from agentkit_protocol.protocols import VerbHandler
 
-__all__ = ["BACKEND_VERBS", "FRONTEND_VERBS", "STANDARD_VERBS", "VerbCategory", "VerbSpec"]
+
+__all__ = [
+    "BACKEND_VERBS",
+    "FRONTEND_VERBS",
+    "STANDARD_VERBS",
+    "VerbAlias",
+    "VerbBinding",
+    "VerbBindings",
+    "VerbCategory",
+    "VerbSpec",
+    "verb_to_tool",
+]
 
 VerbCategory = Literal["backend", "frontend"]
 
@@ -153,3 +167,74 @@ FRONTEND_VERBS: list[VerbSpec] = [
 ]
 
 STANDARD_VERBS: list[VerbSpec] = [*BACKEND_VERBS, *FRONTEND_VERBS]
+
+
+def verb_to_tool(verb: VerbSpec) -> ToolDef:
+    """Build a provider-neutral ``ToolDef`` from a ``VerbSpec``.
+
+    Drops ``executes_on`` on purpose: the LLM must not see the execution category; the
+    orchestrator routes by it after the tool call. This is the single source of truth for
+    turning the frozen verb catalogue into LLM tool definitions.
+    """
+    return ToolDef(
+        name=verb.name,
+        description=verb.description,
+        input_schema=verb.input_schema,
+    )
+
+
+@dataclass(frozen=True)
+class VerbBinding:
+    """Binds a verb name to its async handler.
+
+    Runtime registers these for adapter methods, skill/MCP gateways, and profile-extension
+    verbs. Frozen: a binding is an immutable declaration.
+    """
+
+    name: str
+    handler: VerbHandler
+
+
+@dataclass(frozen=True)
+class VerbAlias:
+    """Declares an alternate verb name that routes to a target verb.
+
+    Profiles declare these (e.g. ``agentkit-bi``: ``get_widget_data`` ->
+    ``get_component_data``) without binding a handler -- the target verb's handler is
+    resolved at lookup time. Frozen: a declaration must not mutate.
+    """
+
+    name: str
+    target: str
+
+
+class VerbBindings:
+    """Resolves a verb name (or alias) to its handler.
+
+    Runtime populates this from adapter methods, skill/MCP gateways, and profile
+    declarations. Profiles only declare ``VerbAlias`` / extension-verb ``VerbBinding``
+    objects (exported for runtime collection); they never call this directly. This is the
+    single lookup table the orchestrator consults to route a backend-sync tool call.
+    """
+
+    def __init__(self) -> None:
+        """Start with no bindings or aliases."""
+        self._handlers: dict[str, VerbHandler] = {}
+        self._aliases: dict[str, str] = {}
+
+    def bind(self, binding: VerbBinding) -> None:
+        """Register a verb name -> handler binding."""
+        self._handlers[binding.name] = binding.handler
+
+    def alias(self, alias: VerbAlias) -> None:
+        """Register an alias name -> target verb name mapping."""
+        self._aliases[alias.name] = alias.target
+
+    def resolve(self, name: str) -> VerbHandler | None:
+        """Resolve a verb name (or alias) to its handler, or None if unregistered."""
+        target = self._aliases.get(name, name)
+        return self._handlers.get(target)
+
+    def names(self) -> list[str]:
+        """All registered names (bindings + aliases)."""
+        return [*self._handlers.keys(), *self._aliases.keys()]

@@ -1,32 +1,33 @@
-"""Contract tests for agentkit-core models (the two narrow waists)."""
+"""Contract tests for agentkit-protocol models (the two narrow waists)."""
 
 from __future__ import annotations
 
 import json
 
 import pytest
-from agentkit_core import PROTOCOL_VERSION
-from agentkit_core import AdapterCapabilities
-from agentkit_core import BaseSSE
-from agentkit_core import Component
-from agentkit_core import ComponentCapabilities
-from agentkit_core import ComponentSchema
-from agentkit_core import CopilotCitationCollection
-from agentkit_core import CopilotFunctionCall
-from agentkit_core import CopilotMessageArtifact
-from agentkit_core import CopilotMessageChunk
-from agentkit_core import CopilotPromptSuggestions
-from agentkit_core import CopilotStatusUpdate
-from agentkit_core import ErrorArtifact
-from agentkit_core import Field
-from agentkit_core import MarkdownArtifact
-from agentkit_core import Message
-from agentkit_core import QueryRequest
-from agentkit_core import SessionContext
-from agentkit_core import TableArtifact
-from agentkit_core import TextArtifact
-from agentkit_core import deterministic_uuid
 from pydantic import ValidationError
+
+from agentkit_protocol import PROTOCOL_VERSION
+from agentkit_protocol import AdapterCapabilities
+from agentkit_protocol import BaseSSE
+from agentkit_protocol import Component
+from agentkit_protocol import ComponentCapabilities
+from agentkit_protocol import ComponentSchema
+from agentkit_protocol import CopilotCitationCollection
+from agentkit_protocol import CopilotFunctionCall
+from agentkit_protocol import CopilotMessageArtifact
+from agentkit_protocol import CopilotMessageChunk
+from agentkit_protocol import CopilotPromptSuggestions
+from agentkit_protocol import CopilotStatusUpdate
+from agentkit_protocol import ErrorArtifact
+from agentkit_protocol import Field
+from agentkit_protocol import MarkdownArtifact
+from agentkit_protocol import Message
+from agentkit_protocol import QueryRequest
+from agentkit_protocol import SessionContext
+from agentkit_protocol import TableArtifact
+from agentkit_protocol import TextArtifact
+from agentkit_protocol import deterministic_uuid
 
 
 # -- Narrow waist ②: SSE 6 events -----------------------------------------

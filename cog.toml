@@ -21,10 +21,10 @@ owner = "ShawnDen-coder"
 repository = "agentkit"
 package_template = "remote"
 
-[packages.agentkit-core]
-path = "packages/agentkit-core"
+[packages.agentkit-protocol]
+path = "packages/agentkit-protocol"
 public_api = true
-changelog_path = "packages/agentkit-core/CHANGELOG.md"
+changelog_path = "packages/agentkit-protocol/CHANGELOG.md"
 pre_bump_hooks = [
-    "uv version --package agentkit-core {{version}}",
+    "uv version --package agentkit-protocol {{version}}",
 ]

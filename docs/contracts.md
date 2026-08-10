@@ -4,17 +4,25 @@
 > surface and the versioning policy. Changes to anything listed here require a version
 > bump (see [Versioning](#versioning)) and an update to this file + `agentkit-architecture.md`.
 
-`PROTOCOL_VERSION = "0.2.0"` (defined in `agentkit_core`).
+`PROTOCOL_VERSION = "0.2.0"` (defined in `agentkit_protocol`).
 
 > **0.2.0 (M2) changes** (additive, backward-compatible):
-> - `SessionContext.auth_token: SecretStr | None` (`exclude=True`) - BI auth token for
+> - `SessionContext.auth_token: SecretStr | None` (`exclude=True`) - delegated credential for
 >   Option B backend-fetch. Transported via HTTP `Authorization` header (FastAPI layer
 >   extracts + injects), never the request body; never serialized into `model_dump()` /
 >   JSON / logs. Closes the §5.1-vs-§10 gap.
 > - `LlmClient` Protocol tightened: `call -> LlmResponse`, `stream -> AsyncIterator[LlmChunk]`,
 >   param `functions` -> `tools: list[ToolDef] | None`. New provider-neutral types in
->   `agentkit_core.llm`: `ToolDef`, `LlmChunk`, `LlmToolCall`, `LlmResponse`. Lets the
+>   `agentkit_protocol.llm`: `ToolDef`, `LlmChunk`, `LlmToolCall`, `LlmResponse`. Lets the
 >   orchestrator route tool calls without depending on any LLM SDK.
+> - `ComponentAdapter.get_selection` added: the `get_selection` verb was frozen in 0.1.0 as a
+>   backend adapter method, but the Protocol omitted it. Added for consistency (no existing
+>   adapters to break).
+> - Verb binding/alias declaration primitives added in `agentkit_protocol.verbs`: `VerbBinding`
+>   (name + handler), `VerbAlias` (name → target, no handler -- lets profiles declare aliases
+>   without depending on runtime), and a `VerbBindings` lookup container. The live registry
+>   (populating the container from adapters/skills/MCP/profiles via entry-points) is still M2
+>   in `agentkit-runtime`.
 >
 > **0.1.0 (M1)**: initial freeze - the 6 SSE events, `QueryRequest`/`Message`/`SessionContext`,
 > `Component`/`ComponentSchema` envelope, `ComponentAdapter` Protocol, 11-verb catalogue,
@@ -51,8 +59,9 @@ class-level discriminator (not duplicated inside `data`). `data` is
 - `Message`: `role` ∈ `{human, tool, assistant, system}` drives the state machine
   (§6.3). `role=tool` only for frontend UI-action results (carries `name` + `data`).
 - `SessionContext`: `user_identity`, `user_permissions[]`, `workspace_id`, `trace_id`,
-  `auth_token: SecretStr | None` (0.2.0, `exclude=True`). The auth token travels via the
-  HTTP `Authorization` header (extracted + injected by the FastAPI layer), NOT the body;
+  `auth_token: SecretStr | None` (0.2.0, `exclude=True`) - the user's delegated credential
+  for Option B backend-fetch. It travels via the HTTP `Authorization` header (extracted +
+  injected by the FastAPI layer), NOT the body;
   it is never serialized (excluded from `model_dump()` / JSON / logs). Adapters read it
   via `ctx.auth_token.get_secret_value()`.
 
@@ -61,19 +70,20 @@ class-level discriminator (not duplicated inside `data`). `data` is
 The contract a host-tool adapter implements. Discovered via the `agentkit.adapters`
 entry-point group; runtime never statically depends on adapters.
 
-### ComponentAdapter Protocol (`agentkit_core.protocols`)
+### ComponentAdapter Protocol (`agentkit_protocol.protocols`)
 
 | Member | Kind |
 |---|---|
 | `origin: str` | attribute |
 | `capabilities: AdapterCapabilities` | attribute |
 | `async list_components(ctx) -> list[Component]` | method (verb: get_catalog) |
+| `async get_selection(ctx) -> ComponentData` | method (verb: get_selection) |
 | `async get_component(ctx, component_id) -> Component` | method |
 | `async get_component_data(ctx, component, input_args) -> ComponentData` | method (verb: get_component_data) |
 | `async refine_component(ctx, component, refinement) -> ComponentData` | method (verb: refine_component) |
 | `async get_semantic_model(ctx, component) -> ComponentSchema` | method (verb: get_semantic_model) |
 
-### Domain-neutral abstractions (`agentkit_core.models`)
+### Domain-neutral abstractions (`agentkit_protocol.models`)
 
 - `Component`: `component_id`, `origin`, `name`, `params[]`, `capabilities`,
   `schema_` (the schema envelope).
@@ -112,16 +122,19 @@ Per Option B (§D.4), verbs split by execution location:
 - **Frontend FunctionCall** (4): `add_component_to_dashboard`,
   `update_component_in_dashboard`, `manage_navigation_bar`, `assign_tasks_to_agents`.
 
-M1 freezes the catalogue (names + input schemas + category) in `STANDARD_VERBS`. The
-live `VerbRegistry` (binding handlers) is wired in M2. BI aliases
-(`get_widget_data` → `get_component_data`, etc.) and `export_artifact` are declared in
-`agentkit_bi`.
+M1 freezes the catalogue (names + input schemas + category) in `STANDARD_VERBS`. Core
+also provides the declaration primitives (0.2.0): `VerbBinding` (name + handler),
+`VerbAlias` (name → target, no handler -- lets profiles declare aliases like
+`get_widget_data` → `get_component_data` without depending on runtime), and a
+`VerbBindings` lookup container. The live registry (populating the container from
+adapters/skills/MCP/profiles via entry-points) is wired in M2 `agentkit-runtime`; BI
+aliases and `export_artifact` are declared in `agentkit_bi`.
 
 ## Authentication & authorization seam (user-implemented)
 
 Auth runs *before* a request enters the SSE/orchestrator path, so it is **not** part of
 either narrow waist and does **not** bump `PROTOCOL_VERSION`. The contracts live in
-`agentkit_core.auth` and are **transport-agnostic** (no HTTP type) so one implementation
+`agentkit_protocol.auth` and are **transport-agnostic** (no HTTP type) so one implementation
 serves both the web profile (FastAPI) and the DCC profile (PySide/Maya host session).
 
 Users plug in their own mechanism (JWT, OAuth2, API-key, mTLS, studio SSO, ...) by
@@ -152,14 +165,14 @@ short-lived/unlogged/uncached token - are enforced by the *implementations*, not
 - Live `VerbRegistry`, FastAPI app, SSE endpoint - M2. Packages `agentkit-runtime`,
   `agentkit-mock-app`, `agentkit-cli` are scaffolded (M2 in progress); the auth seam
   (`Authenticator`/`Authorizer`/`Principal`/`AuthContext`/`AuthzAction`) is frozen in
-  `agentkit_core.auth` (0.2.0+, no `PROTOCOL_VERSION` bump - it is above the waists).
+  `agentkit_protocol.auth` (0.2.0+, no `PROTOCOL_VERSION` bump - it is above the waists).
 - Real adapter (Superset) - M3. Multi-hop (`MAX_HOPS`) - M4. Skills - M5. MCP - M6.
 - `BiSemanticModel.calculated_fields` is optional (default `None`) pending the §14 Q1
   resolution at M3 (Superset + Metabase + Looker comparison).
 
 > Auth-token transport (formerly the §5.1-vs-§10 open gap) is resolved in 0.2.0:
 > `SessionContext.auth_token` via `Authorization` header, `exclude=True`. The full
-> auth/authz seam (how that token + identity + permissions are derived) is the
+> auth/authz seam (how that credential + identity + permissions are derived) is the
 > user-implemented `Authenticator`/`Authorizer` above.
 
 ## Versioning

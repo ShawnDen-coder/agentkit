@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from agentkit_core import BaseSSE
-from agentkit_core import CopilotFunctionCall
-from agentkit_core import CopilotMessageArtifact
-from agentkit_core import CopilotMessageChunk
-from agentkit_core import CopilotPromptSuggestions
-from agentkit_core import TableArtifact
-from agentkit_core import collect_stream
-from agentkit_core import human_message
-from agentkit_core import query
+from agentkit_protocol import BaseSSE
+from agentkit_protocol import CopilotFunctionCall
+from agentkit_protocol import CopilotMessageArtifact
+from agentkit_protocol import CopilotMessageChunk
+from agentkit_protocol import CopilotPromptSuggestions
+from agentkit_protocol import TableArtifact
+from agentkit_protocol import collect_stream
+from agentkit_protocol import human_message
+from agentkit_protocol import query
 
 
 async def _fake_stream() -> AsyncIterator[BaseSSE]:

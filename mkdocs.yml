@@ -79,4 +79,4 @@ extra:
     - icon: fontawesome/brands/github
       link: https://github.com/ShawnDen-coder/agentkit
     - icon: fontawesome/brands/python
-      link: https://pypi.org/project/agentkit-core
+      link: https://pypi.org/project/agentkit-protocol

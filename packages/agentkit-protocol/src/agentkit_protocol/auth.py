@@ -32,7 +32,7 @@ from pydantic import ConfigDict
 from pydantic import Field as PydanticField
 from pydantic import SecretStr
 
-from agentkit_core.models import SessionContext
+from agentkit_protocol.models import SessionContext
 
 
 __all__ = [
@@ -105,7 +105,7 @@ class Principal(BaseModel):
     Carries who the user is (``user_identity``), what they may do
     (``user_permissions``), and a delegated credential for backend data calls
     (``auth_token``, Option B). The app layer bridges it onto a ``SessionContext`` via
-    ``session_from_principal``. ``auth_token`` is the delegated BI token (``SecretStr``,
+    ``session_from_principal``. ``auth_token`` is that delegated credential (``SecretStr``,
     never serialized) -- adapters fetch data under this identity, never a service account
     (§10). Frozen: a verified identity must not be mutated mid-request.
     """
