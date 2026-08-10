@@ -26,10 +26,6 @@ from agentkit_protocol.auth import DenyAllAuthorizer
 from agentkit_protocol.auth import Principal
 from agentkit_protocol.auth import session_from_principal
 from agentkit_protocol.helpers import deterministic_uuid
-from agentkit_protocol.llm import LlmChunk
-from agentkit_protocol.llm import LlmResponse
-from agentkit_protocol.llm import LlmToolCall
-from agentkit_protocol.llm import ToolDef
 from agentkit_protocol.models import PROTOCOL_VERSION
 from agentkit_protocol.models import AdapterCapabilities
 from agentkit_protocol.models import Artifact
@@ -57,7 +53,6 @@ from agentkit_protocol.models import SessionContext
 from agentkit_protocol.models import TableArtifact
 from agentkit_protocol.models import TextArtifact
 from agentkit_protocol.protocols import ComponentAdapter
-from agentkit_protocol.protocols import LlmClient
 from agentkit_protocol.protocols import Orchestrator
 from agentkit_protocol.protocols import VerbHandler
 from agentkit_protocol.testing import CopilotResponse
@@ -72,7 +67,6 @@ from agentkit_protocol.verbs import VerbBinding
 from agentkit_protocol.verbs import VerbBindings
 from agentkit_protocol.verbs import VerbCategory
 from agentkit_protocol.verbs import VerbSpec
-from agentkit_protocol.verbs import verb_to_tool
 
 
 __all__ = [
@@ -108,10 +102,6 @@ __all__ = [
     "DenyAllAuthorizer",
     "ErrorArtifact",
     "Field",
-    "LlmChunk",
-    "LlmClient",
-    "LlmResponse",
-    "LlmToolCall",
     "MarkdownArtifact",
     "Message",
     "MessageRole",
@@ -122,7 +112,6 @@ __all__ = [
     "SessionContext",
     "TableArtifact",
     "TextArtifact",
-    "ToolDef",
     "VerbAlias",
     "VerbBinding",
     "VerbBindings",
@@ -134,5 +123,4 @@ __all__ = [
     "human_message",
     "query",
     "session_from_principal",
-    "verb_to_tool",
 ]

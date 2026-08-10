@@ -1,4 +1,4 @@
-"""Contract tests for the standard verb catalogue, VerbSpec -> ToolDef, and verb bindings."""
+"""Contract tests for the standard verb catalogue and verb bindings."""
 
 from __future__ import annotations
 
@@ -9,11 +9,9 @@ import pytest
 from agentkit_protocol import BACKEND_VERBS
 from agentkit_protocol import FRONTEND_VERBS
 from agentkit_protocol import STANDARD_VERBS
-from agentkit_protocol import ToolDef
 from agentkit_protocol import VerbAlias
 from agentkit_protocol import VerbBinding
 from agentkit_protocol import VerbBindings
-from agentkit_protocol import verb_to_tool
 
 
 async def _handler(ctx, args):
@@ -26,17 +24,6 @@ def test_standard_verbs_split() -> None:
     assert len(FRONTEND_VERBS) == 4
     assert len(STANDARD_VERBS) == 11
     assert [*BACKEND_VERBS, *FRONTEND_VERBS] == STANDARD_VERBS
-
-
-def test_verb_to_tool_drops_executes_on() -> None:
-    """verb_to_tool builds a ToolDef without executes_on (the LLM must not see the category)."""
-    for verb in STANDARD_VERBS:
-        tool = verb_to_tool(verb)
-        assert isinstance(tool, ToolDef)
-        assert tool.name == verb.name
-        assert tool.description == verb.description
-        assert tool.input_schema == verb.input_schema
-        assert not hasattr(tool, "executes_on")
 
 
 def test_verb_binding_is_frozen() -> None:

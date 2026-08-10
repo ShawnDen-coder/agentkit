@@ -1,10 +1,13 @@
-"""Protocols (structural contracts) for the adapter, orchestrator, and LLM client.
+"""Protocols (structural contracts) for the adapter and orchestrator.
 
 These are the abstract seams of the framework. M1 freezes the *Protocol* shapes;
 concrete implementations arrive in later milestones:
   - ComponentAdapter impls: BI adapters (M3), DCC adapters (M8+), MockAdapter (M2).
   - Orchestrator impl: StatelessOrchestrator (M2, agentkit-runtime).
-  - LlmClient impl: LangChainLlmClient (M2, agentkit-llm-langchain).
+
+LLM calls: orchestrator impls use langchain ``BaseChatModel`` directly (no
+``LlmClient`` abstraction layer). langchain enters at the runtime package, not
+the contracts.
 """
 
 from __future__ import annotations
@@ -16,9 +19,6 @@ from typing import Any
 from typing import Protocol
 from typing import runtime_checkable
 
-from agentkit_protocol.llm import LlmChunk
-from agentkit_protocol.llm import LlmResponse
-from agentkit_protocol.llm import ToolDef
 from agentkit_protocol.models import AdapterCapabilities
 from agentkit_protocol.models import BaseSSE
 from agentkit_protocol.models import Component
@@ -29,7 +29,7 @@ from agentkit_protocol.models import Refinement
 from agentkit_protocol.models import SessionContext
 
 
-__all__ = ["ComponentAdapter", "LlmClient", "Orchestrator", "VerbHandler"]
+__all__ = ["ComponentAdapter", "Orchestrator", "VerbHandler"]
 
 
 @runtime_checkable
@@ -85,41 +85,11 @@ class Orchestrator(Protocol):
     ``run`` is an async generator: calling it returns an ``AsyncIterator[BaseSSE]``
     (not a coroutine). The M2 impl (StatelessOrchestrator) follows the Option B core
     loop (§6.1): backend-sync fetch within the request, streaming chunks/artifacts.
+    LLM calls go through a langchain ``BaseChatModel`` the impl holds directly.
     """
 
     def run(self, request: QueryRequest) -> AsyncIterator[BaseSSE]:
         """Yield the SSE stream for a query (async generator, not a coroutine)."""
-        ...
-
-
-@runtime_checkable
-class LlmClient(Protocol):
-    """LLM call layer. Providers swap via env; agent code is provider-agnostic (§6.4).
-
-    Two methods map to the Option B two-phase loop:
-      - ``call`` (Phase 1, non-streaming, with tools): returns a ``LlmResponse`` whose
-        ``tool_calls`` the orchestrator routes (backend sync vs frontend FunctionCall).
-      - ``stream`` (Phase 2, streaming, usually without tools): yields ``LlmChunk``
-        text deltas for the final answer.
-
-    The M2 default impl (agentkit-llm-langchain) wraps a langchain ChatModel and
-    converts between these provider-neutral types and langchain's own.
-    """
-
-    def stream(
-        self,
-        messages: list[Any],
-        tools: list[ToolDef] | None = None,
-    ) -> AsyncIterator[LlmChunk]:
-        """Yield streamed text chunks (async generator). Phase 2 final answer."""
-        ...
-
-    async def call(
-        self,
-        messages: list[Any],
-        tools: list[ToolDef] | None = None,
-    ) -> LlmResponse:
-        """Return a full response (Phase 1: with tools to obtain tool_calls)."""
         ...
 
 

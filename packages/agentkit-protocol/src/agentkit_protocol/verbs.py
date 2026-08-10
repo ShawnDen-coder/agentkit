@@ -21,7 +21,6 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field as PydanticField
 
-from agentkit_protocol.llm import ToolDef
 from agentkit_protocol.protocols import VerbHandler
 
 
@@ -34,7 +33,6 @@ __all__ = [
     "VerbBindings",
     "VerbCategory",
     "VerbSpec",
-    "verb_to_tool",
 ]
 
 VerbCategory = Literal["backend", "frontend"]
@@ -167,20 +165,6 @@ FRONTEND_VERBS: list[VerbSpec] = [
 ]
 
 STANDARD_VERBS: list[VerbSpec] = [*BACKEND_VERBS, *FRONTEND_VERBS]
-
-
-def verb_to_tool(verb: VerbSpec) -> ToolDef:
-    """Build a provider-neutral ``ToolDef`` from a ``VerbSpec``.
-
-    Drops ``executes_on`` on purpose: the LLM must not see the execution category; the
-    orchestrator routes by it after the tool call. This is the single source of truth for
-    turning the frozen verb catalogue into LLM tool definitions.
-    """
-    return ToolDef(
-        name=verb.name,
-        description=verb.description,
-        input_schema=verb.input_schema,
-    )
 
 
 @dataclass(frozen=True)

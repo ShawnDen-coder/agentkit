@@ -16,7 +16,7 @@ changing anything in `packages/agentkit-protocol`** — the contracts are intent
 
 Only **`packages/agentkit-protocol`** (M1) is implemented. The README, `pyproject.toml`
 (`[tool.uv.sources]`), `docs/contracts.md`, and code docstrings reference many packages that
-do **not** yet exist in the repo: `agentkit-bi`, `agentkit-runtime`, `agentkit-llm-langchain`,
+do **not** yet exist in the repo: `agentkit-bi`, `agentkit-runtime`,
 `agentkit-mock-app`, `agentkit-cli`, `agentkit-mcp-gateway`, `agentkit-adapter-*`. Treat those
 as the planned layout (milestones M2–M8+), not present code. The README marking `agentkit-bi`
 as "M1 ✅" is ahead of the actual tree. `PROTOCOL_VERSION = "0.2.0"` in `agentkit_protocol.models`.
@@ -95,9 +95,9 @@ downcasts back with `BiSemanticModel.model_validate(component.schema_.model_dump
 `STANDARD_VERBS` (11, frozen in `agentkit_protocol.verbs`): 7 backend
 (`get_component_data`, `refine_component`, `get_catalog`, `get_selection`, `get_semantic_model`,
 `get_skill_content`, `execute_tool`) + 4 frontend (the UI actions above). `VerbSpec` is frozen
-(`extra="forbid"`). The live `VerbRegistry` (binding handlers) is M2. `ToolDef` (built from a
-`VerbSpec`) deliberately omits `executes_on` — the LLM must not see it; the orchestrator routes
-by it after the tool call.
+(`extra="forbid"`). The live `VerbRegistry` (binding handlers) is M2. LLM tool definitions are
+built by the orchestrator from `VerbSpec` directly (langchain tool format); there is no
+`ToolDef`/`verb_to_tool` in core, and no `executes_on` exposed to the LLM.
 
 ### Auth seam (above the waists, no `PROTOCOL_VERSION` bump)
 
@@ -123,7 +123,8 @@ These are enforced by design intent, not tooling — honor them when adding pack
 2. **Runtime never statically depends on any adapter** — discovered via the `agentkit.adapters`
    entry-point group at runtime.
 3. **Core has zero framework deps** (only `pydantic` + `xxhash`). `langchain` enters only at the
-   `LlmClient` layer (`agentkit-llm-langchain`, M2), never the contracts.
+   runtime layer (`agentkit-runtime`, M2 — orchestrator holds a `BaseChatModel` directly), never
+   the contracts.
 
 Profiles (`agentkit-bi`, future `agentkit-dcc`) version independently of `PROTOCOL_VERSION`.
 

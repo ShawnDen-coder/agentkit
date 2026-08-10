@@ -315,22 +315,26 @@ stateDiagram-v2
 - `role=tool`:**仅**前端 UI 动作结果回程,继续 agent。
 - 数据获取不经过状态机--它在 `运行agent` 内同步发生。
 
-### 6.4 LLMClient 抽象
+### 6.4 LLM 调用层:直接用 langchain BaseChatModel
 
-例 38 用 `openai` SDK,例 99 用 OpenRouter 裸 httpx——均未抽象。框架显式抽出来,厂商按 env 切 provider,**agent 代码零改动**:
+例 38 用 `openai` SDK,例 99 用 OpenRouter 裸 httpx——均未抽象。本框架直接采用 langchain `BaseChatModel` 体系:provider 切换由 langchain 自身抽象(`ChatOpenAI`/`ChatAnthropic`/`ChatOpenRouter`/`ChatOllama`),agent 代码零改动。
 
 ```python
-class LlmClient(Protocol):
-    async def stream(self, messages: list[Message],
-                     functions: list[Function] | None = None
-                     ) -> AsyncIterator[Chunk | FunctionCall]: ...
-    async def call(self, messages: list[Message],
-                   functions: list[Function] | None = None) -> Response: ...
+# agentkit-runtime 的 StatelessOrchestrator 持有一个 BaseChatModel 实例
+class StatelessOrchestrator:
+    def __init__(self, llm: BaseChatModel, ...):
+        self._llm = llm            # 厂商按 env 实例化,如 ChatOpenAI(model=...)
+        ...
 
-# Providers: OpenAIProvider / AnthropicProvider / OpenRouterProvider / OllamaProvider(本地)
+    async def run(self, request):
+        # Phase 1: 调用 self._llm.bind_tools(tools).ainvoke(messages) 获取 tool_calls
+        # orchestrator 路由 tool_call(后端同步 vs 前端 FunctionCall)
+        # Phase 2: self._llm.astream(messages) 流式输出最终答案
 ```
 
-> **0.2.0 实现**:core 加 `ToolDef`/`LlmChunk`/`LlmToolCall`/`LlmResponse`(provider 中立),`LlmClient` 收紧为 `call -> LlmResponse`、`stream -> AsyncIterator[LlmChunk]`、参数 `functions -> tools: list[ToolDef]`。M2 的 `LangChainLlmClient`(agentkit-llm-langchain)在这些类型与 langchain 自有类型间转换。orchestrator 据此路由 tool_call(后端同步 vs 前端 FunctionCall)。
+**不引入 `LlmClient` Protocol 抽象层**(0.2.0 草案曾有,发布前撤回):langchain 自身已 provider 无关,再造一层等于规避不存在的问题,反而把 `messages: list[Any]` 这种漏点带进 core。`langchain` 进入 `agentkit-runtime` 的依赖,不进入 `agentkit-protocol`(wire contract 跟 LLM SDK 解耦仍成立)。
+
+> **0.2.0 修订(撤回草案)**:0.2.0 草案曾在 core 加 `ToolDef`/`LlmChunk`/`LlmToolCall`/`LlmResponse` 与 `LlmClient` Protocol,并规划 `agentkit-llm-langchain` 包做转换。发布前撤回——直接用 langchain `BaseChatModel` 即可,core 不该装 LLM 抽象(那不是 wire contract)。`agentkit-llm-langchain` 包取消。
 
 ### 6.5 动态 system prompt(继承例 99)
 
@@ -454,7 +458,7 @@ flowchart TB
 | A. 新 BI 工具 | 一个 `WidgetAdapter` | entry-point 插件注册 | 厂商/社区 |
 | B. 新 agent 能力 | Skill 或 MCP 工具 | Skill 注册表 / MCP 网关 | 任何开发者 |
 | C. 新输出 artifact | 一个 FunctionCall 动词 | `VerbRegistry` 注册 | 厂商/框架 |
-| D. 新 LLM | 一个 `LlmClient` 实现 | entry-point 注册 | 厂商/社区 |
+| D. 新 LLM provider | 一个 langchain `BaseChatModel` 子类 | langchain 自身注册(`ChatOpenAI`/`ChatAnthropic`/...) | langchain 生态 |
 
 ### 9.2 插件注册(统一机制)
 
@@ -467,12 +471,11 @@ superset = "agentkit_adapters_superset:SupersetAdapter"
 [project.entry-points."agentkit.skills"]
 variance = "agentkit_skill_variance:VarianceSkill"
 
-[project.entry-points."agentkit.llm_providers"]
-langchain = "agentkit_llm_langchain:LangChainLlmClient"
-
 [project.entry-points."agentkit.verbs"]
 export_csv = "agentkit_export:ExportCsvVerb"
 ```
+
+> LLM provider **不**走 agentkit entry-point——langchain 自身管 provider 切换(`ChatOpenAI`/`ChatAnthropic`/`ChatOpenRouter`/`ChatOllama` 等 `BaseChatModel` 子类)。orchestrator 持有一个 `BaseChatModel` 实例即可,无需框架再注册。
 
 ### 9.3 多工作区(自部署内的多租户)
 
@@ -536,7 +539,7 @@ flowchart LR
 | Skill | 仅 prompt 注入(例 41) | prompt + 工具支撑双模式 | 异常检测等需确定性工具 |
 | MCP | 伞形 function + token 鉴权 | 按工具生成 function + **RLS 透传** | BI 行级权限是安全红线 |
 | 适配器 | 无(只服务自己) | `WidgetAdapter` 窄腰 + 能力协商 | 多 BI 工具可迁移 |
-| LLM | openai SDK / OpenRouter 各例不同 | 统一 `LlmClient` 抽象 | 厂商自选,agent 零改动 |
+| LLM | openai SDK / OpenRouter 各例不同 | 统一 langchain `BaseChatModel`(厂商自实例化) | 厂商自选,agent 零改动 |
 | 安全 | token-only | RLS 透传 + 数据围栏 + skill 沙箱 | BI 数据权限敏感 |
 
 ---
@@ -603,7 +606,7 @@ flowchart LR
 |---|---|---|
 | 协议模型 L0 | Pydantic v2 | 对齐 openbb-ai,`model_dump_json(exclude_none=True)` 序列化契约直接复用 |
 | Web / SSE L3 | FastAPI + sse-starlette | openbb-ai 同款,`EventSourceResponse` |
-| LLM 客户端 | langchain ChatModel 体系,包一层 `LlmClient` 抽象 | 统一 OpenAI/Anthropic/OpenRouter/Ollama,厂商按 env 切 |
+| LLM 客户端 | langchain `BaseChatModel` 体系(直接使用,不再包 `LlmClient` 抽象) | 统一 OpenAI/Anthropic/OpenRouter/Ollama,厂商按 env 实例化 |
 | 编排 L1 | **无状态手写 `StatelessOrchestrator`** | 状态全来自 `request.messages`,对齐 openbb 例 30/38/99,契约最干净 |
 | 适配器 HTTP L2 | httpx.AsyncClient | 异步,对齐例 99 |
 | 测试 | pytest + 自研 DSL(仿 `CopilotResponse`) | 契约测试两个窄腰 |
@@ -747,7 +750,7 @@ flowchart TB
 ### B.4 DCC 专属新关切
 
 - **变更安全**:`modify_component`/`execute_command` 是对用户场景的**写操作**,远比 BI 只读危险。需:读写动词分离、`can_modify` 能力声明、dry-run/preview、undo 集成(Maya undo queue / UE `ScopedEditorTransaction`)、破坏性操作确认 hook。
-- **延迟**:DCC 交互式,多秒 LLM 调用体感差;优先流式 + `reasoning_step`;可走本地 LLM(Ollama,`LlmClient` 已支持)。
+- **延迟**:DCC 交互式,多秒 LLM 调用体感差;优先流式 + `reasoning_step`;可走本地 LLM(Ollama,langchain `ChatOllama` 即用)。
 - **进程模型**:
   - **out-of-process(默认)**:agent 独立 Python 服务,DCC 内跑轻量 bridge(实现传输客户端 + ComponentAdapter)。符合自部署模型,框架独立。
   - **in-process**:agent 跑在 DCC 内嵌 Python。低延迟、直连 API,但绑定 Maya 自带 Python 版本、生命周期耦合。延迟敏感场景 opt-in。
@@ -797,8 +800,7 @@ flowchart BT
     CORE["agentkit-protocol<br/>(域中立:协议 + Component + ComponentAdapter)"]
     BI["agentkit-bi<br/>(BI profile)"]
     DCC["agentkit-dcc<br/>(DCC profile, M8+)"]
-    RT["agentkit-runtime<br/>(profile 无关)"]
-    LLM["agentkit-llm-langchain"]
+    RT["agentkit-runtime<br/>(profile 无关,持 langchain BaseChatModel)"]
     CLI["agentkit-cli"]
     MCP["agentkit-mcp-gateway"]
     MOCK["agentkit-mock-app"]
@@ -810,7 +812,6 @@ flowchart BT
     BI --> CORE
     DCC --> CORE
     RT --> CORE
-    LLM --> CORE
     MCP --> CORE
     MOCK --> CORE
     SK --> CORE
@@ -819,16 +820,14 @@ flowchart BT
     AD_DCC --> CORE
     AD_DCC --> DCC
     CLI --> RT
-    CLI --> LLM
     EX --> RT
-    EX --> LLM
     EX --> AD_BI
     EX --> SK
 
     RT -.->|entry-point 发现| AD_BI
 ```
 
-实线 = 静态依赖;虚线 = 运行时 entry-point 发现(**无静态依赖**)。runtime 与 adapters 间无实线;**runtime profile 无关**(只依赖 core),领域语义由 profile 注入(见附录 D)。
+实线 = 静态依赖;虚线 = 运行时 entry-point 发现(**无静态依赖**)。runtime 与 adapters 间无实线;**runtime profile 无关**(只依赖 core),领域语义由 profile 注入(见附录 D)。`langchain` 是 `agentkit-runtime` 的直接依赖(orchestrator 持 `BaseChatModel` 实例),不再单列 `agentkit-llm-langchain` 包。
 
 ### C.3 包清单
 
@@ -836,9 +835,8 @@ flowchart BT
 |---|---|---|---|---|
 | `agentkit-protocol` / `agentkit_protocol` | 协议机制 + 域中立抽象(Component/ComponentSchema/ComponentAdapter) | pydantic | ✅ | M1 |
 | `agentkit-bi` / `agentkit_bi` | BI profile:BiSemanticModel + chart artifact + BI prompt | agentkit-protocol | ✅ | M1 |
-| `agentkit-runtime` / `agentkit_runtime` | StatelessOrchestrator + FastAPI 工厂 + 注册表 | agentkit-protocol, fastapi, sse-starlette, httpx | ✅ | M2 |
-| `agentkit-llm-langchain` / `agentkit_llm_langchain` | LlmClient 默认实现 | agentkit-protocol, langchain | ✅ | M2 |
-| `agentkit-cli` / `agentkit_cli` | `new-adapter`/`new-skill`/`run --mock-app` | runtime, llm-langchain, typer | ✅ | M2/M7 |
+| `agentkit-runtime` / `agentkit_runtime` | StatelessOrchestrator + FastAPI 工厂 + 注册表(持 langchain `BaseChatModel`) | agentkit-protocol, langchain-core, fastapi, sse-starlette, httpx | ✅ | M2 |
+| `agentkit-cli` / `agentkit_cli` | `new-adapter`/`new-skill`/`run --mock-app` | runtime, typer | ✅ | M2/M7 |
 | `agentkit-mcp-gateway` / `agentkit_mcp_gateway` | MCP 网关 + RLS 透传 | agentkit-protocol, httpx, mcp | ✅ | M6 |
 | `agentkit-mock-app` / `agentkit_mock_app` | 假数据应用 + MockAdapter | agentkit-protocol, fastapi | dev | M2 |
 | `agentkit-adapter-superset` / `agentkit_adapters_superset` | Superset 适配器 | agentkit-protocol, agentkit-bi, httpx | ✅ | M3 |
@@ -848,7 +846,7 @@ flowchart BT
 | `agentkit-skill-variance` / `agentkit_skill_variance` | 差异分析 | agentkit-protocol | ✅ | M5 |
 | `agentkit-skill-anomaly` / `agentkit_skill_anomaly` | 异常检测 | agentkit-protocol | ✅ | M5+ |
 | `agentkit-skill-commentary` / `agentkit_skill_commentary` | 结构化点评 | agentkit-protocol | ✅ | M5+ |
-| `examples/*` | 参考 agent | runtime, llm-langchain, adapters, skills | ❌ | M2+ |
+| `examples/*` | 参考 agent | runtime, adapters, skills | ❌ | M2+ |
 | `frontend/` `@agentkit/react` | 前端 SDK | (TS,不在 uv workspace) | ✅ npm | M7 |
 
 ### C.4 目录布局
@@ -866,7 +864,6 @@ agentkit/                              # monorepo root
 │   ├── agentkit-protocol ✅  src/agentkit_protocol/   {models,protocols,verbs,helpers,testing}
 │   ├── agentkit-bi ✅    src/agentkit_bi/     {models,artifacts,prompt,adapter,verbs}
 │   ├── agentkit-runtime  src/agentkit_runtime/    {orchestrator,app,loop,prompt,registry}
-│   ├── agentkit-llm-langchain  src/agentkit_llm_langchain/
 │   ├── agentkit-cli      src/agentkit_cli/
 │   ├── agentkit-mcp-gateway  src/agentkit_mcp_gateway/
 │   └── agentkit-mock-app  src/agentkit_mock_app/
@@ -901,7 +898,6 @@ members = [
 [tool.uv.sources]
 agentkit-protocol = { workspace = true }
 agentkit-runtime = { workspace = true }
-agentkit-llm-langchain = { workspace = true }
 agentkit-cli = { workspace = true }
 agentkit-mcp-gateway = { workspace = true }
 agentkit-mock-app = { workspace = true }
@@ -930,7 +926,7 @@ build-backend = "hatchling.build"
 packages = ["src/agentkit_protocol"]
 ```
 
-`packages/runtime/pyproject.toml`(默认带 langchain):
+`packages/runtime/pyproject.toml`(直接依赖 langchain-core):
 
 ```toml
 [project]
@@ -939,7 +935,7 @@ version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
     "agentkit-protocol",
-    "agentkit-llm-langchain",   # 默认 LlmClient(langchain 从 M2 起)
+    "langchain-core>=0.3",    # BaseChatModel / bind_tools / astream(orchestrator 直接使用)
     "fastapi>=0.110",
     "sse-starlette>=2",
     "httpx>=0.27",
@@ -947,7 +943,6 @@ dependencies = [
 
 [tool.uv.sources]
 agentkit-protocol = { workspace = true }
-agentkit-llm-langchain = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
@@ -980,8 +975,9 @@ build-backend = "hatchling.build"
 |---|---|---|
 | `agentkit.adapters` | ComponentAdapter 实现 | `superset = "agentkit_adapters_superset:SupersetAdapter"` |
 | `agentkit.skills` | Skill 实现 | `variance = "agentkit_skills_variance:VarianceSkill"` |
-| `agentkit.llm_providers` | LlmClient 实现 | `langchain = "agentkit_llm_langchain:LangChainLlmClient"` |
 | `agentkit.verbs` | 自定义 Verb | `export_csv = "agentkit_verbs_export:ExportCsvVerb"` |
+
+> 无 `agentkit.llm_providers` 组——langchain 自身管 provider(`ChatOpenAI` 等 `BaseChatModel` 子类)。
 
 ### C.7 uv 工作流
 
@@ -998,7 +994,7 @@ uv publish                                 # 发布
 | 里程碑 | 新增包 |
 |---|---|
 | M1 | `agentkit-protocol` + `agentkit-bi`(验证 core/profile 分层) |
-| M2 | `agentkit-runtime` + `agentkit-llm-langchain` + `agentkit-mock-app`(+ `agentkit-cli` 最小) |
+| M2 | `agentkit-runtime` + `agentkit-mock-app`(+ `agentkit-cli` 最小;orchestrator 直接用 langchain `BaseChatModel`) |
 | M3 | `agentkit-adapter-superset` |
 | M4 | (无新包,runtime 内开多跳) |
 | M5 | `agentkit-skill-variance`(+ skill 注册表已在 runtime) |
@@ -1020,7 +1016,7 @@ uv publish                                 # 发布
 
 | 层 | 包 | 内容 | 领域耦合 |
 |---|---|---|---|
-| Core | `agentkit-protocol` | 协议机制(6 事件/函数调用回环/QueryRequest/role 状态机)、域中立抽象(`Component`/`ComponentSchema` 泛化信封/`ComponentAdapter`/`AdapterCapabilities`/`SessionContext`)、泛化动词(`get_component_data`/`refine_component`/`get_catalog`/`get_selection`/`execute_tool`/`get_skill_content`)、泛化 artifact(text/table/markdown)、Orchestrator/LlmClient/注册表/testing | 零 |
+| Core | `agentkit-protocol` | 协议机制(6 事件/函数调用回环/QueryRequest/role 状态机)、域中立抽象(`Component`/`ComponentSchema` 泛化信封/`ComponentAdapter`/`AdapterCapabilities`/`SessionContext`)、泛化动词(`get_component_data`/`refine_component`/`get_catalog`/`get_selection`/`execute_tool`/`get_skill_content`)、泛化 artifact(text/table/markdown)、`Orchestrator` Protocol、注册表/testing | 零 |
 | BI Profile | `agentkit-bi` | `BiSemanticModel`(dimensions/measures/drill_paths/time_grains)、BI artifact(chart:chartType/xKey/yKey)、BI prompt 构建器、`Widget` 别名/`BiAdapter` 便利基 | BI |
 | DCC Profile | `agentkit-dcc`(M8+) | `DccSchema`(node_type/attributes/connections/transforms)、变更动词(modify_component/execute_command)、DCC prompt 构建器、选区 helper | DCC |
 

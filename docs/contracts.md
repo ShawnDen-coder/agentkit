@@ -11,10 +11,6 @@
 >   Option B backend-fetch. Transported via HTTP `Authorization` header (FastAPI layer
 >   extracts + injects), never the request body; never serialized into `model_dump()` /
 >   JSON / logs. Closes the §5.1-vs-§10 gap.
-> - `LlmClient` Protocol tightened: `call -> LlmResponse`, `stream -> AsyncIterator[LlmChunk]`,
->   param `functions` -> `tools: list[ToolDef] | None`. New provider-neutral types in
->   `agentkit_protocol.llm`: `ToolDef`, `LlmChunk`, `LlmToolCall`, `LlmResponse`. Lets the
->   orchestrator route tool calls without depending on any LLM SDK.
 > - `ComponentAdapter.get_selection` added: the `get_selection` verb was frozen in 0.1.0 as a
 >   backend adapter method, but the Protocol omitted it. Added for consistency (no existing
 >   adapters to break).
@@ -23,6 +19,10 @@
 >   without depending on runtime), and a `VerbBindings` lookup container. The live registry
 >   (populating the container from adapters/skills/MCP/profiles via entry-points) is still M2
 >   in `agentkit-runtime`.
+> - LLM calls: orchestrator impls use langchain `BaseChatModel` directly. There is **no**
+>   `LlmClient` Protocol and **no** `agentkit-llm-langchain` package; langchain enters only
+>   at `agentkit-runtime`, never the contracts. (Reverses the 0.2.0-draft `LlmClient` decision
+>   before any release — langchain's own provider abstraction is sufficient.)
 >
 > **0.1.0 (M1)**: initial freeze - the 6 SSE events, `QueryRequest`/`Message`/`SessionContext`,
 > `Component`/`ComponentSchema` envelope, `ComponentAdapter` Protocol, 11-verb catalogue,
@@ -159,9 +159,9 @@ short-lived/unlogged/uncached token - are enforced by the *implementations*, not
 
 ## What is NOT yet implemented (deferred)
 
-- `Orchestrator` / `LlmClient` - Protocol only in 0.1.0; `LlmClient` tightened in 0.2.0.
-  `LangChainLlmClient` landed in `agentkit-llm-langchain` (M2); `StatelessOrchestrator`
-  (in `agentkit-runtime`) still pending.
+- `Orchestrator` - Protocol only in 0.1.0; `StatelessOrchestrator` (in `agentkit-runtime`)
+  still pending. The impl holds a langchain `BaseChatModel` directly and routes tool calls
+  (backend sync vs frontend FunctionCall) per Option B.
 - Live `VerbRegistry`, FastAPI app, SSE endpoint - M2. Packages `agentkit-runtime`,
   `agentkit-mock-app`, `agentkit-cli` are scaffolded (M2 in progress); the auth seam
   (`Authenticator`/`Authorizer`/`Principal`/`AuthContext`/`AuthzAction`) is frozen in

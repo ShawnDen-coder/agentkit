@@ -8,7 +8,7 @@ DCC hosts like Maya/UE/PySide later). Modeled on OpenBB Workspace: two narrow wa
 domain semantics live in swappable profile packages (`agentkit-bi`, future `agentkit-dcc`).
 
 - **Core is domain-neutral** (only `pydantic`); **langchain** enters only at the
-  `LlmClient` layer (M2), never the contracts.
+  runtime layer (M2), never the contracts.
 - **Orchestration is stateless** (hand-rolled; state lives in `request.messages`).
 - **Option B**: data/skill/MCP are backend-sync calls; the FunctionCall loop is reserved
   for frontend UI actions only.
