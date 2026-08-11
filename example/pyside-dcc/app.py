@@ -30,6 +30,7 @@ from dcc_adapter import MockDccAdapter
 from openrouter import make_openrouter_llm
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QLabel
 from PySide6.QtWidgets import QLineEdit
 from PySide6.QtWidgets import QMainWindow
 from PySide6.QtWidgets import QPushButton
@@ -66,6 +67,8 @@ class MainWindow(QMainWindow):
         self._messages: list[Message] = []
         self._tasks: set[asyncio.Task[None]] = set()  # keep refs so tasks aren't GC'd
         self._streaming = False  # True while streaming an assistant message inline
+        self._stream_interrupted = False  # True when a status interlude paused the stream
+        self._assistant_buf = ""  # accumulates the assistant's text for history
 
         # --- UI ---
         central = QWidget()
@@ -74,6 +77,10 @@ class MainWindow(QMainWindow):
         self.chat = QTextEdit()
         self.chat.setReadOnly(True)
         layout.addWidget(self.chat, 3)
+
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color:#888; font-size:12px; padding:2px 4px;")
+        layout.addWidget(self.status_label)
 
         self.scene = QTreeWidget()
         self.scene.setHeaderLabels(["场景(前端 UI 动作落在这里)"])
@@ -118,21 +125,30 @@ class MainWindow(QMainWindow):
                 trace_id="trace-dcc",
             ),
         )
+        self._assistant_buf = ""  # reset for this turn
+        self._set_status("思考中")
         try:
             async for event in self._orch.run(req):
                 if isinstance(event, CopilotMessageChunk):
                     self._stream_chunk(event.text)
                     continue
-                # Non-chunk event: close any open streaming paragraph first.
-                self._end_stream()
                 if isinstance(event, CopilotStatusUpdate):
-                    self._append("assistant", f"<i>{event.label or event.status}</i>")
-                elif isinstance(event, CopilotMessageArtifact):
+                    # Transient status: update the label, don't pollute the chat flow.
+                    self._set_status(event.label or event.status)
+                    if self._streaming:
+                        self._stream_interrupted = True
+                    continue
+                # Artifact / functioncall / suggestions: close the streaming paragraph.
+                self._end_stream()
+                if isinstance(event, CopilotMessageArtifact):
                     self._render_artifact(event.artifact)
                 elif isinstance(event, CopilotFunctionCall):
                     # Option B in-process: execute the UI action, then re-run with role=tool.
                     self._append("assistant", f"<i>-> 前端执行:{event.name}({event.arguments})</i>")
                     self._execute_ui_action(event)
+                    # Discard the prelude (buf) - the orchestrator synthesizes the
+                    # assistant tool_call on resume (Message has no tool_calls field).
+                    self._assistant_buf = ""
                     self._messages.append(
                         Message(role="tool", name=event.name, data={"added": True, **event.arguments})
                     )
@@ -140,23 +156,45 @@ class MainWindow(QMainWindow):
                     return
                 elif isinstance(event, CopilotPromptSuggestions):
                     self._append("assistant", "<i>建议:" + " · ".join(event.suggestions) + "</i>")
+            # Turn complete: record the assistant's final answer in conversation history.
             self._end_stream()
+            self._flush_assistant()
         except Exception as e:  # surface orchestrator errors to the chat panel
             self._end_stream()
             self._append("assistant", f'<b style="color:#dc2626">错误:</b> {e}')
+        finally:
+            self._set_status("")
 
     def _stream_chunk(self, text: str) -> None:
         """Append a streamed text delta inline (not a new paragraph per chunk)."""
         if not self._streaming:
             self._append("assistant", "")  # new paragraph with the 助手 label
             self._streaming = True
+        elif self._stream_interrupted:
+            # Resuming after a status/tool interlude: separate the text segments.
+            self.chat.moveCursor(QTextCursor.End)
+            self.chat.insertPlainText("\n\n")
+            self._stream_interrupted = False
+            self._assistant_buf += "\n\n"
         self.chat.moveCursor(QTextCursor.End)
         self.chat.insertPlainText(text)
         self.chat.ensureCursorVisible()
+        self._assistant_buf += text
+
+    def _flush_assistant(self) -> None:
+        """Record the accumulated assistant text as a Message in conversation history."""
+        if self._assistant_buf.strip():
+            self._messages.append(Message(role="assistant", content=self._assistant_buf))
+        self._assistant_buf = ""
 
     def _end_stream(self) -> None:
         """Close the current streaming paragraph so the next event starts fresh."""
         self._streaming = False
+        self._stream_interrupted = False
+
+    def _set_status(self, text: str) -> None:
+        """Update the transient status label (kept out of the chat flow)."""
+        self.status_label.setText(f"⏳ {text}" if text else "")
 
     def _execute_ui_action(self, fc: CopilotFunctionCall) -> None:
         """The frontend UI action - here, add a node to the scene tree."""
