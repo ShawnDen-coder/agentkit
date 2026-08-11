@@ -51,6 +51,23 @@ selects `B`, `C4`, `D`, `UP`, `RUF`, `SIM`. Pre-commit adds `uv-lock`, `yamlfmt`
 `check-github-workflows`, `actionlint` (note: there is **no** ruff pre-commit hook — lint runs
 via `just lint` and CI).
 
+## Examples
+
+`example/` holds two runnable deployment demos. They use a scripted `FakeOrchestrator`
+(implements the `Orchestrator` Protocol, makes real adapter calls, no LLM) so they run
+without API keys or `agentkit-runtime` (M2). When M2 lands, swap `FakeOrchestrator` for
+`LanggraphOrchestrator` - the adapter, auth, frontend, and SSE wiring are unchanged.
+
+- `example/fastapi-bi/` - C&S over HTTP+SSE (`to_sse()`); browser frontend handles the
+  FunctionCall round-trip by re-POSTing `role=tool`.
+- `example/pyside-dcc/` - in-process `BaseSSE` object consumption (no serialization); Qt
+  UI; round-trip via re-calling `run()` with `role=tool`.
+
+Run with ephemeral deps (no venv pollution): `uv run --with fastapi --with uvicorn python
+example/fastapi-bi/backend.py`, or `uv run --with pyside6 --with qasync python
+example/pyside-dcc/app.py`. Example code is linted (`.ruff.toml` includes `example/**`);
+UI display text is Chinese, docstrings/comments and wire-protocol values stay English.
+
 ## Architecture — the two narrow waists
 
 1. **`ComponentAdapter` Protocol** (`agentkit_protocol.protocols`) — backend ↔ host tool. The only
