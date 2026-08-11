@@ -1,8 +1,9 @@
-"""FastAPI BI example backend: SSE ``/v1/query`` + auth seam + FakeOrchestrator.
+"""FastAPI BI example backend: SSE ``/v1/query`` + auth seam + LanggraphOrchestrator.
 
-Run (from repo root, after `uv sync --all-packages` + `uv pip install fastapi uvicorn`):
+Run (from repo root, after `uv sync --all-packages`):
 
-    uv run python example/fastapi-bi/backend.py
+    export OPENROUTER_API_KEY="sk-or-v1-..."
+    uv run --with fastapi --with uvicorn --with langchain-openai python example/fastapi-bi/backend.py
 
 Then open http://127.0.0.1:8000 in a browser.
 
@@ -20,16 +21,17 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 
-# Make `from fake_orchestrator import FakeOrchestrator` resolve from example/_common.
+# Make `from openrouter import make_openrouter_llm` resolve from example/_common.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "_common"))
 
 import uvicorn
+from agentkit_runtime import LanggraphOrchestrator
 from bi_adapter import MockBiAdapter
-from fake_orchestrator import FakeOrchestrator
 from fastapi import FastAPI
 from fastapi import Request
 from fastapi.responses import FileResponse
 from fastapi.responses import StreamingResponse
+from openrouter import make_openrouter_llm
 
 from agentkit_protocol import AllowAllAuthorizer
 from agentkit_protocol import AuthContext
@@ -87,7 +89,8 @@ async def _auth_context(request: Request) -> AuthContext:
 
 
 adapter = MockBiAdapter()
-orchestrator = FakeOrchestrator(adapter)
+llm = make_openrouter_llm()  # env: OPENROUTER_API_KEY; default model anthropic/claude-3.5-sonnet
+orchestrator = LanggraphOrchestrator(llm, adapter)
 authenticator: Authenticator = ExampleAuthenticator()
 authorizer = AllowAllAuthorizer()  # real impl: per-verb RLS
 

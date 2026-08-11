@@ -6,7 +6,8 @@
 ## 运行
 
 ```bash
-uv run --with pyside6 --with qasync python example/pyside-dcc/app.py
+# .env 里写:OPENROUTER_API_KEY=sk-or-v1-...  (可选:OPENROUTER_MODEL=anthropic/claude-sonnet-4)
+uv run --env-file .env --with pyside6 --with qasync --with langchain-openai python example/pyside-dcc/app.py
 ```
 
 弹出一个窗口,带聊天面板和场景树。输入"场景里有什么",发送。
@@ -29,11 +30,11 @@ uv run --with pyside6 --with qasync python example/pyside-dcc/app.py
 - `app.py` - PySide6 `QMainWindow` + qasync;进程内 `BaseSSE` 消费。
 - `dcc_adapter.py` - mock DCC `ComponentAdapter`(场景节点、选择)。
 
-## `agentkit-runtime` 落地后
+## `agentkit-runtime` 已落地
 
-把 `app.py` 里的 `FakeOrchestrator` import 换成 `LanggraphOrchestrator`(M2,langgraph)。
-对进程内 DCC 场景,langgraph checkpointer 用内存版 `MemorySaver` 即可(不用持久化)。
-`app.py` / `dcc_adapter.py` 其它都不用改。
+本示例已接入 `LanggraphOrchestrator`(M2,langgraph StateGraph)。orchestrator 无状态:
+每次从 `request.messages` 重建 langgraph 消息,不用 checkpointer(状态全在 messages 里)。
+`FakeOrchestrator` 保留在 `example/_common/` 作为无 LLM 回退——换回它只需改一行 import。
 
 ## DCC profile 下的 auth
 
@@ -43,5 +44,4 @@ uv run --with pyside6 --with qasync python example/pyside-dcc/app.py
 
 ## 关于 LLM
 
-同 `fastapi-bi`:本示例用 `FakeOrchestrator`(不调 LLM),没有 LLM token 位置。真实 LLM 由
-`agentkit-runtime`(M2)提供,从 env 读 provider key。
+同 `fastapi-bi`:设 `OPENROUTER_API_KEY` env;默认 model `anthropic/claude-sonnet-4`。

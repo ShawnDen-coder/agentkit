@@ -92,8 +92,6 @@ class MockBiAdapter:
         """Refine an already-fetched widget (verb: refine_component). Stubbed."""
         return await self.get_component_data(ctx, component, {})
 
-    async def get_semantic_model(
-        self, ctx: SessionContext, component: Component
-    ) -> ComponentSchema:
+    async def get_semantic_model(self, ctx: SessionContext, component: Component) -> ComponentSchema:
         """Fetch the semantic model of a widget (verb: get_semantic_model)."""
         return component.schema_

@@ -1,8 +1,9 @@
 """PySide6 DCC example: in-process agent, no HTTP, no SSE serialization.
 
-Run (from repo root, after `uv sync --all-packages` + `uv pip install pyside6 qasync`):
+Run (from repo root, after `uv sync --all-packages`):
 
-    uv run python example/pyside-dcc/app.py
+    export OPENROUTER_API_KEY="sk-or-v1-..."
+    uv run --with pyside6 --with qasync --with langchain-openai python example/pyside-dcc/app.py
 
 This shows the LOCAL deployment (DCC host like Maya/UE/PySide): the agent runs
 IN-PROCESS with the Qt UI. There is no HTTP boundary and no SSE wire serialization
@@ -21,11 +22,13 @@ import sys
 from pathlib import Path
 
 
-# Make `from fake_orchestrator import FakeOrchestrator` resolve from example/_common.
+# Make `from openrouter import make_openrouter_llm` resolve from example/_common.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "_common"))
 
+from agentkit_runtime import LanggraphOrchestrator
 from dcc_adapter import MockDccAdapter
-from fake_orchestrator import FakeOrchestrator
+from openrouter import make_openrouter_llm
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QApplication
 from PySide6.QtWidgets import QLineEdit
 from PySide6.QtWidgets import QMainWindow
@@ -59,9 +62,10 @@ class MainWindow(QMainWindow):
         self.resize(900, 600)
 
         self._adapter = MockDccAdapter()
-        self._orch = FakeOrchestrator(self._adapter)
+        self._orch = LanggraphOrchestrator(make_openrouter_llm(), self._adapter)
         self._messages: list[Message] = []
         self._tasks: set[asyncio.Task[None]] = set()  # keep refs so tasks aren't GC'd
+        self._streaming = False  # True while streaming an assistant message inline
 
         # --- UI ---
         central = QWidget()
@@ -114,22 +118,45 @@ class MainWindow(QMainWindow):
                 trace_id="trace-dcc",
             ),
         )
-        async for event in self._orch.run(req):
-            if isinstance(event, CopilotStatusUpdate):
-                self._append("assistant", f"<i>{event.label or event.status}</i>")
-            elif isinstance(event, CopilotMessageArtifact):
-                self._render_artifact(event.artifact)
-            elif isinstance(event, CopilotMessageChunk):
-                self._append("assistant", event.text)
-            elif isinstance(event, CopilotFunctionCall):
-                # Option B in-process: execute the UI action, then re-run with role=tool.
-                self._append("assistant", f"<i>-> 前端执行:{event.name}({event.arguments})</i>")
-                self._execute_ui_action(event)
-                self._messages.append(Message(role="tool", name=event.name, data={"added": True, **event.arguments}))
-                self._spawn(self._run())  # resume the round-trip
-                return
-            elif isinstance(event, CopilotPromptSuggestions):
-                self._append("assistant", "<i>建议:" + " · ".join(event.suggestions) + "</i>")
+        try:
+            async for event in self._orch.run(req):
+                if isinstance(event, CopilotMessageChunk):
+                    self._stream_chunk(event.text)
+                    continue
+                # Non-chunk event: close any open streaming paragraph first.
+                self._end_stream()
+                if isinstance(event, CopilotStatusUpdate):
+                    self._append("assistant", f"<i>{event.label or event.status}</i>")
+                elif isinstance(event, CopilotMessageArtifact):
+                    self._render_artifact(event.artifact)
+                elif isinstance(event, CopilotFunctionCall):
+                    # Option B in-process: execute the UI action, then re-run with role=tool.
+                    self._append("assistant", f"<i>-> 前端执行:{event.name}({event.arguments})</i>")
+                    self._execute_ui_action(event)
+                    self._messages.append(
+                        Message(role="tool", name=event.name, data={"added": True, **event.arguments})
+                    )
+                    self._spawn(self._run())  # resume the round-trip
+                    return
+                elif isinstance(event, CopilotPromptSuggestions):
+                    self._append("assistant", "<i>建议:" + " · ".join(event.suggestions) + "</i>")
+            self._end_stream()
+        except Exception as e:  # surface orchestrator errors to the chat panel
+            self._end_stream()
+            self._append("assistant", f'<b style="color:#dc2626">错误:</b> {e}')
+
+    def _stream_chunk(self, text: str) -> None:
+        """Append a streamed text delta inline (not a new paragraph per chunk)."""
+        if not self._streaming:
+            self._append("assistant", "")  # new paragraph with the 助手 label
+            self._streaming = True
+        self.chat.moveCursor(QTextCursor.End)
+        self.chat.insertPlainText(text)
+        self.chat.ensureCursorVisible()
+
+    def _end_stream(self) -> None:
+        """Close the current streaming paragraph so the next event starts fresh."""
+        self._streaming = False
 
     def _execute_ui_action(self, fc: CopilotFunctionCall) -> None:
         """The frontend UI action - here, add a node to the scene tree."""
@@ -139,16 +166,14 @@ class MainWindow(QMainWindow):
 
     def _render_artifact(self, artifact: TableArtifact | TextArtifact) -> None:
         if isinstance(artifact, TableArtifact):
-            self._append(
-                "assistant", f"<b>表格</b>:{len(artifact.rows)} 行 × {len(artifact.columns)} 列"
-            )
+            self._append("assistant", f"<b>表格</b>:{len(artifact.rows)} 行 × {len(artifact.columns)} 列")
         else:
             self._append("assistant", f"<b>文本</b>:{artifact.text}")
 
     def _append(self, role: str, html: str) -> None:
         label = {"human": "我", "assistant": "助手"}.get(role, role)
         color = "#2563eb" if role == "assistant" else "#888"
-        self.chat.append(f'<p style="margin:4px 0;color:{color}"><b>{label}</b> {html}</p>"')
+        self.chat.append(f'<p style="margin:4px 0;color:{color}"><b>{label}</b> {html}</p>')
 
 
 def main() -> None:

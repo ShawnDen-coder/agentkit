@@ -84,8 +84,6 @@ class MockDccAdapter:
         """Refine a node (verb: refine_component). Stubbed for the example."""
         return await self.get_component_data(ctx, component, {})
 
-    async def get_semantic_model(
-        self, ctx: SessionContext, component: Component
-    ) -> ComponentSchema:
+    async def get_semantic_model(self, ctx: SessionContext, component: Component) -> ComponentSchema:
         """Fetch the node's schema (verb: get_semantic_model)."""
         return component.schema_

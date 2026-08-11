@@ -28,3 +28,11 @@ changelog_path = "packages/agentkit-protocol/CHANGELOG.md"
 pre_bump_hooks = [
     "uv version --package agentkit-protocol {{version}}",
 ]
+
+[packages.agentkit-runtime]
+path = "packages/agentkit-runtime"
+public_api = true
+changelog_path = "packages/agentkit-runtime/CHANGELOG.md"
+pre_bump_hooks = [
+    "uv version --package agentkit-runtime {{version}}",
+]

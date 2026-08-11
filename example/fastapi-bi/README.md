@@ -6,7 +6,8 @@ C&S(客户端/服务器)部署:浏览器前端通过 SSE wire 协议跟 FastAPI 
 ## 运行
 
 ```bash
-uv run --with fastapi --with uvicorn python example/fastapi-bi/backend.py
+# .env 里写:OPENROUTER_API_KEY=sk-or-v1-...  (可选:OPENROUTER_MODEL=anthropic/claude-sonnet-4)
+uv run --env-file .env --with fastapi --with uvicorn --with langchain-openai python example/fastapi-bi/backend.py
 ```
 
 打开 <http://127.0.0.1:8000>,输入"显示各地区销售额",发送。
@@ -30,16 +31,14 @@ uv run --with fastapi --with uvicorn python example/fastapi-bi/backend.py
 - `bi_adapter.py` - mock BI `ComponentAdapter`。
 - `static/index.html` - 最小聊天 UI:SSE 流 + FunctionCall 往返。
 
-## `agentkit-runtime` 落地后
+## `agentkit-runtime` 已落地
 
-把 `backend.py` 里的 `FakeOrchestrator` import 换成 `LanggraphOrchestrator`(M2,langgraph)。
-其它都不用改:adapter、auth、SSE 序列化、前端都是对着 `agentkit_protocol` 装配的,不依赖
-orchestrator 实现。
+本示例已接入 `LanggraphOrchestrator`(M2,langgraph StateGraph)。`FakeOrchestrator`
+保留在 `example/_common/` 作为无 LLM 的教学回退——换回它只需改一行 import。
 
 ## 关于 LLM
 
-本示例用 `FakeOrchestrator`(脚本化,不调 LLM),所以没有 LLM token 的位置。真实的 LLM
-集成在 `agentkit-runtime`(M2):它持 langchain `BaseChatModel`,从 env(`OPENAI_API_KEY`
-等)读 provider key。注意区分两个 token:`SessionContext.auth_token`(用户的委托取数凭据,
-走 Authorization header)≠ LLM provider key(后端 env 配置)。等 M2 落地,有 key 时示例自动
-切到真 runtime。
+本示例用 `LanggraphOrchestrator` + 真 LLM。设 `OPENROUTER_API_KEY` env(OpenRouter key);
+默认 model `anthropic/claude-sonnet-4`,可通过 `OPENROUTER_MODEL` env 覆盖。
+注意区分两个 token:`SessionContext.auth_token`(用户的委托取数凭据,走 Authorization
+header)≠ `OPENROUTER_API_KEY`(后端 env,LLM provider)。

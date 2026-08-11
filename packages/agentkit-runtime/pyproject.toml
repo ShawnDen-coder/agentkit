@@ -1,0 +1,24 @@
+[project]
+name = "agentkit-runtime"
+version = "0.1.0"
+description = "AgentKit - LLM-backed orchestrator (langgraph StateGraph, Option B core loop)"
+authors = [{name = "shawndeng", email = "shawndeng1109@qq.com"}]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.10,<3.14.99"
+dependencies = [
+    "agentkit-protocol",
+    "langgraph>=0.2",
+    "langchain-core>=0.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/ShawnDen-coder/agentkit"
+Repository = "https://github.com/ShawnDen-coder/agentkit"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentkit_runtime"]
