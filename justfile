@@ -2,7 +2,7 @@ set dotenv-load := true
 set shell := ["bash", "-euc"]
 set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 
-package_name := "agentkit_core"
+package_name := "agentkit_protocol"
 python_min_version := "3.10"
 python_max_version := "3.14"
 python_dev_version := python_min_version

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>agentkit · FastAPI BI 示例</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; display: flex; height: 100vh; }
+    #chat { flex: 1; display: flex; flex-direction: column; border-right: 1px solid #ddd; }
+    #messages { flex: 1; overflow-y: auto; padding: 16px; }
+    .msg { margin-bottom: 12px; }
+    .msg .role { font-size: 11px; color: #888; text-transform: uppercase; }
+    .msg.assistant .role { color: #2563eb; }
+    .artifact { margin: 8px 0; border: 1px solid #ddd; border-radius: 6px; padding: 8px; }
+    .artifact h4 { margin: 0 0 6px; font-size: 12px; color: #555; }
+    table { border-collapse: collapse; font-size: 13px; }
+    td, th { border: 1px solid #eee; padding: 3px 8px; }
+    .status { font-size: 12px; color: #888; font-style: italic; }
+    .widget { background: #eff6ff; border: 1px solid #93c5fd; border-radius: 6px; padding: 8px; margin: 6px 0; font-size: 13px; }
+    .fc { background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px; padding: 6px 8px; margin: 6px 0; font-size: 12px; }
+    .suggestions { margin-top: 8px; }
+    .suggestions button { font-size: 12px; margin-right: 6px; padding: 4px 8px; cursor: pointer; }
+    #inputbar { display: flex; border-top: 1px solid #ddd; }
+    #input { flex: 1; padding: 12px; border: none; font-size: 14px; outline: none; }
+    #send { padding: 12px 20px; border: none; background: #2563eb; color: #fff; cursor: pointer; }
+    #dashboard { width: 320px; padding: 16px; overflow-y: auto; background: #f9fafb; }
+    #dashboard h3 { margin: 0 0 12px; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div id="chat">
+    <div id="messages"></div>
+    <div id="inputbar">
+      <input id="input" placeholder="提问:显示各地区销售额" autocomplete="off" />
+      <button id="send">发送</button>
+    </div>
+  </div>
+  <div id="dashboard">
+    <h3>仪表盘(前端 UI 动作落在这里)</h3>
+    <div id="widgets"></div>
+  </div>
+
+<script>
+const TOKEN = "demo-token-123";
+let messages = [];
+
+const $ = (id) => document.getElementById(id);
+const msgs = $("messages"), widgets = $("widgets");
+
+function add(role, html) {
+  const div = document.createElement("div");
+  div.className = "msg " + role;
+  const roleLabel = { human: "我", assistant: "助手" }[role] || role;
+  div.innerHTML = `<div class="role">${roleLabel}</div>${html}`;
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function renderTable(artifact) {
+  if (artifact.kind !== "table") return `<pre>${JSON.stringify(artifact, null, 2)}</pre>`;
+  const cols = artifact.columns.map(c => `<th>${c}</th>`).join("");
+  const rows = artifact.rows.map(r => "<tr>" + r.map(v => `<td>${v}</td>`).join("") + "</tr>").join("");
+  return `<div class="artifact"><h4>表格</h4><table><tr>${cols}</tr>${rows}</table></div>`;
+}
+
+// POST the QueryRequest and stream the SSE response. EventSource is GET-only, so
+// we parse the SSE frames manually from the fetch ReadableStream.
+async function runQuery() {
+  const resp = await fetch("/v1/query", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ messages }),
+  });
+  if (!resp.ok) { add("assistant", `<div class="status">错误 ${resp.status}</div>`); return; }
+
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) >= 0) {
+      const frame = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      let event, data;
+      for (const line of frame.split("\n")) {
+        if (line.startsWith("event: ")) event = line.slice(7);
+        else if (line.startsWith("data: ")) data = line.slice(6);
+      }
+      if (event && data) await handle(event, JSON.parse(data));
+    }
+  }
+}
+
+async function handle(event, data) {
+  switch (event) {
+    case "copilotStatusUpdate":
+      add("assistant", `<div class="status">${data.label || data.status}</div>`);
+      break;
+    case "copilotMessageArtifact":
+      add("assistant", renderTable(data.artifact));
+      break;
+    case "copilotMessageChunk":
+      add("assistant", `<div>${data.text}</div>`);
+      break;
+    case "copilotFunctionCall":
+      // Option B: the backend yielded a frontend UI action and ended the stream.
+      // The frontend executes it, then re-POSTs role=tool to resume.
+      add("assistant", `<div class="fc">-> 前端执行:${data.name}(${JSON.stringify(data.arguments)})</div>`);
+      executeUiAction(data.name, data.arguments);
+      messages.push({ role: "tool", name: data.name, data: { added: true, ...data.arguments } });
+      await runQuery();  // resume the round-trip
+      break;
+    case "copilotPromptSuggestions":
+      const btns = data.suggestions.map(s => `<button onclick="$('input').value='${s}';$('send').click()">${s}</button>`).join("");
+      add("assistant", `<div class="suggestions">${btns}</div>`);
+      break;
+  }
+}
+
+function executeUiAction(name, args) {
+  // The frontend UI action - here, "add a widget to the dashboard".
+  if (name === "add_component_to_dashboard") {
+    const w = document.createElement("div");
+    w.className = "widget";
+    w.textContent = `📊 组件:${args.component_id}`;
+    widgets.appendChild(w);
+  }
+}
+
+async function send() {
+  const text = $("input").value.trim();
+  if (!text) return;
+  $("input").value = "";
+  messages.push({ role: "human", content: text });
+  add("human", `<div>${text}</div>`);
+  await runQuery();
+}
+
+$("send").addEventListener("click", send);
+$("input").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+</script>
+</body>
+</html>

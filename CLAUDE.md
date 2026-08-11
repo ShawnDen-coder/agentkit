@@ -95,9 +95,13 @@ downcasts back with `BiSemanticModel.model_validate(component.schema_.model_dump
 `STANDARD_VERBS` (11, frozen in `agentkit_protocol.verbs`): 7 backend
 (`get_component_data`, `refine_component`, `get_catalog`, `get_selection`, `get_semantic_model`,
 `get_skill_content`, `execute_tool`) + 4 frontend (the UI actions above). `VerbSpec` is frozen
-(`extra="forbid"`). The live `VerbRegistry` (binding handlers) is M2. LLM tool definitions are
-built by the orchestrator from `VerbSpec` directly (langchain tool format); there is no
-`ToolDef`/`verb_to_tool` in core, and no `executes_on` exposed to the LLM.
+(`extra="forbid"`). Core also ships the binding/alias **declaration primitives**: `VerbBinding`
+(name + handler), `VerbAlias` (name -> target, no handler - lets profiles declare aliases like
+`get_widget_data` -> `get_component_data` without depending on runtime), and the `VerbBindings`
+lookup container. The live registry (populating that container from adapter methods / skill / MCP
+gateways via entry-points) is M2. LLM tool definitions are built by the orchestrator from
+`VerbSpec` directly (langchain tool format); there is no `ToolDef`/`verb_to_tool` in core, and no
+`executes_on` exposed to the LLM.
 
 ### Auth seam (above the waists, no `PROTOCOL_VERSION` bump)
 
@@ -138,8 +142,8 @@ and requires updating `docs/contracts.md` **and** `agentkit-architecture.md`. SS
 request models use `extra="forbid"` (strict); envelopes use `extra="allow"` (forward-compat).
 SSE events that don't apply should be ignored by consumers (forward-compat), not removed.
 
-The contract tests in `packages/agentkit-protocol/tests/` (`test_models.py`, `test_testing.py`) are
-the executable spec for the waists — they encode the round-trip and serialization invariants above.
+The contract tests in `packages/agentkit-protocol/tests/` (`test_models.py`, `test_protocols.py`, `test_verbs.py`, `test_testing.py`) are
+the executable spec for the waists — they encode the round-trip, serialization, verb-catalogue, and adapter-Protocol invariants above.
 
 ## Versioning & release
 
