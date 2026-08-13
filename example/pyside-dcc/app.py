@@ -63,7 +63,19 @@ class MainWindow(QMainWindow):
         self.resize(900, 600)
 
         self._adapter = MockDccAdapter()
-        self._orch = LanggraphOrchestrator(make_openrouter_llm(), self._adapter)
+        # system_prompt baked into the create_agent graph (idiomatic langchain): a
+        # SystemMessage prepended to every model call. Verb tools are already described via
+        # bind_tools; this is the role/behavior guidance for the DCC host copilot.
+        self._orch = LanggraphOrchestrator(
+            make_openrouter_llm(),
+            self._adapter,
+            system_prompt=(
+                "You are a DCC host copilot (Maya/UE/PySide). Use the available tools to "
+                "inspect the scene/components and answer the user's question concisely. "
+                "When the user wants to add a node to the scene, call "
+                "add_component_to_dashboard. Reply in Chinese."
+            ),
+        )
         self._messages: list[Message] = []
         self._tasks: set[asyncio.Task[None]] = set()  # keep refs so tasks aren't GC'd
         self._streaming = False  # True while streaming an assistant message inline

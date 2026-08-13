@@ -90,7 +90,19 @@ async def _auth_context(request: Request) -> AuthContext:
 
 adapter = MockBiAdapter()
 llm = make_openrouter_llm()  # env: OPENROUTER_API_KEY; default model anthropic/claude-3.5-sonnet
-orchestrator = LanggraphOrchestrator(llm, adapter)
+# system_prompt is baked into the create_agent graph at construction (idiomatic langchain):
+# it becomes a SystemMessage prepended to every model call. The verb tools are already
+# described to the LLM via bind_tools; this is the role/behavior guidance.
+orchestrator = LanggraphOrchestrator(
+    llm,
+    adapter,
+    system_prompt=(
+        "You are a BI dashboard copilot. Answer the user's question by calling the "
+        "available tools to fetch catalog/data from the BI backend, then explain the "
+        "results concisely. When the user wants to add a component to the dashboard, "
+        "call add_component_to_dashboard. Reply in Chinese."
+    ),
+)
 authenticator: Authenticator = ExampleAuthenticator()
 authorizer = AllowAllAuthorizer()  # real impl: per-verb RLS
 

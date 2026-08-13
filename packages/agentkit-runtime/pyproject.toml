@@ -1,15 +1,18 @@
 [project]
 name = "agentkit-runtime"
 version = "0.1.0"
-description = "AgentKit - LLM-backed orchestrator (langgraph StateGraph, Option B core loop)"
+description = "AgentKit - LLM-backed orchestrator (langchain create_agent, Option B core loop)"
 authors = [{name = "shawndeng", email = "shawndeng1109@qq.com"}]
 license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10,<3.14.99"
 dependencies = [
     "agentkit-protocol",
-    "langgraph>=0.2",
-    "langchain-core>=0.3",
+    # create_agent + AgentMiddleware (ToolErrorMiddleware) live in the `langchain` package.
+    # langchain enters only at the runtime layer, never the contracts (§C.1).
+    "langchain>=1.3",
+    "langgraph>=1.2",
+    "langchain-core>=1.0",
 ]
 
 [project.urls]

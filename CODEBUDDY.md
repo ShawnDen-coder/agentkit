@@ -14,18 +14,17 @@ changing anything in `packages/agentkit-protocol`** — the contracts are intent
 
 ## Current repo state
 
-Only **`packages/agentkit-protocol`** (M1) is implemented. The README, `pyproject.toml`
-(`[tool.uv.sources]`), `docs/contracts.md`, and code docstrings reference many packages that
-do **not** yet exist in the repo: `agentkit-bi`, `agentkit-runtime`,
-`agentkit-mock-app`, `agentkit-cli`, `agentkit-mcp-gateway`, `agentkit-adapter-*`. Treat those
-as the planned layout (milestones M2–M8+), not present code. The README marking `agentkit-bi`
-as "M1 ✅" is ahead of the actual tree. `PROTOCOL_VERSION = "0.2.0"` in `agentkit_protocol.models`.
-
-The `example/` directory holds two end-to-end demos (`fastapi-bi/`, `pyside-dcc/`) that
-drive the **real** `agentkit_protocol` contracts through a scripted `FakeOrchestrator`
-(`example/_common/fake_orchestrator.py`) — no LLM or API key needed. They exist to prove the
-wire contract is the stable seam; swapping `FakeOrchestrator` for a real orchestrator later
-should not require changes to adapters, auth, frontend, or SSE wiring.
+**`packages/agentkit-protocol`** (M1) and **`packages/agentkit-runtime`** (M2) are
+implemented. `agentkit-runtime` ships `LanggraphOrchestrator`, the `Orchestrator` Protocol
+impl: it drives a langchain v1 `create_agent` graph (agent↔tools loop, `recursion_limit`
+budget), routes backend-sync verbs to the adapter and frontend verbs to a
+`CopilotFunctionCall` via `FrontendActionRequested` (the stateless equivalent of
+`interrupt()`), and streams the 6 SSE events. The README, `pyproject.toml`
+(`[tool.uv.sources]`), `docs/contracts.md`, and code docstrings still reference packages that
+do **not** yet exist in the repo: `agentkit-bi`, `agentkit-mock-app`, `agentkit-cli`,
+`agentkit-mcp-gateway`, `agentkit-adapter-*`. Treat those as the planned layout
+(milestones M3–M8+), not present code. The README marking `agentkit-bi` as "M1 ✅" is ahead of
+the actual tree. `PROTOCOL_VERSION = "0.2.0"` in `agentkit_protocol.models`.
 
 ## Commands
 
@@ -43,7 +42,7 @@ uvx --from rust-just just add-package <name>   # scaffold a new workspace packag
 ```
 
 Run a single test (the justfile recipes always run all of `packages/` with coverage; for one
-test, call pytest directly through uv):
+test, call pytest directly through uv — same pattern for protocol and runtime test paths):
 
 ```bash
 uv run --all-packages --all-groups --python 3.10 pytest \
@@ -56,6 +55,35 @@ must be at module top level (`PLC0415` is enforced; only `scripts/**` is exempt)
 selects `B`, `C4`, `D`, `UP`, `RUF`, `SIM`. Pre-commit adds `uv-lock`, `yamlfmt`,
 `check-github-workflows`, `actionlint` (note: there is **no** ruff pre-commit hook — lint runs
 via `just lint` and CI).
+
+**Coverage gotcha:** `just test` / `just test-version` pass `--cov=agentkit_protocol` only
+(justfile `package_name := "agentkit_protocol"`). Runtime code gets **no** coverage from the
+recipes; to cover both packages, call pytest directly with
+`--cov=agentkit_protocol --cov=agentkit_runtime`.
+
+## Examples
+
+`example/` holds two runnable deployment demos that prove the wire contract is the stable
+seam: same `agentkit_protocol` contracts, same Option B state machine, two deployment modes.
+Both entry points now drive `LanggraphOrchestrator` (M2) with an OpenRouter LLM
+(`example/_common/openrouter.py`); `example/_common/fake_orchestrator.py` is retained as a
+scripted, no-API-key `Orchestrator` impl.
+
+- `example/fastapi-bi/` — C&S over HTTP+SSE (`to_sse()`); browser frontend handles the
+  FunctionCall round-trip by re-POSTing `role=tool`.
+- `example/pyside-dcc/` — in-process `BaseSSE` object consumption (no serialization); Qt UI;
+  round-trip via re-calling `run()` with `role=tool`.
+
+Run with ephemeral deps (no venv pollution), needs `OPENROUTER_API_KEY`:
+
+```bash
+export OPENROUTER_API_KEY="sk-or-v1-..."
+uv run --with fastapi --with uvicorn --with langchain-openai python example/fastapi-bi/backend.py
+uv run --with pyside6 --with qasync --with langchain-openai python example/pyside-dcc/app.py
+```
+
+Example code is linted (`.ruff.toml` includes `example/**`); UI display text is Chinese,
+docstrings/comments and wire-protocol values stay English.
 
 ## Architecture — the two narrow waists
 
@@ -104,10 +132,34 @@ downcasts back with `BiSemanticModel.model_validate(component.schema_.model_dump
 (`extra="forbid"`). Core also ships the binding/alias **declaration primitives**: `VerbBinding`
 (name + handler), `VerbAlias` (name -> target, no handler - lets profiles declare aliases like
 `get_widget_data` -> `get_component_data` without depending on runtime), and the `VerbBindings`
-lookup container. The live registry (populating that container from adapter methods / skill / MCP
-gateways via entry-points) is M2. LLM tool definitions are built by the orchestrator from
-`VerbSpec` directly (langchain tool format); there is no `ToolDef`/`verb_to_tool` in core, and no
-`executes_on` exposed to the LLM.
+lookup container. The live entry-point registry (populating that container from skill / MCP
+gateways) is M4/M6; until then `agentkit-runtime` binds the 11 verbs to langchain
+`StructuredTool`s directly via `verb_tools()` (`agentkit_runtime.tools`). LLM tool definitions
+are built by the orchestrator from `VerbSpec` directly (langchain tool format); there is no
+`ToolDef`/`verb_to_tool` in core, and no `executes_on` exposed to the LLM.
+
+### The runtime layer (`agentkit-runtime`, M2)
+
+`LanggraphOrchestrator` (`agentkit_runtime.orchestrator`) holds a langchain `BaseChatModel` + a
+`ComponentAdapter` and compiles a `create_agent` graph once (reused across requests). `run()`
+is an async generator mapping `astream_events(version="v2")` onto the 6 SSE events. Non-obvious
+invariants a future change must preserve:
+
+- **Frontend round-trip is a raised exception, not `interrupt()`.** Frontend-verb tools raise
+  `FrontendActionRequested` (`agentkit_runtime.tools`); `run()` catches it, yields a
+  `CopilotFunctionCall`, and ends the stream. langgraph `interrupt()` would require a
+  checkpointer, which would break the frozen "all state in `request.messages`" contract.
+- **`ToolErrorMiddleware`** (wired in `LanggraphOrchestrator.__init__`) converts
+  `NotImplementedError` (the skill/MCP stubs in `_get_skill_content` / `_execute_tool`) into an
+  error `ToolMessage` for LLM recovery, and lets `FrontendActionRequested` propagate. Add new
+  unimplemented-verb stubs by raising `NotImplementedError`, not by returning an error string.
+- **3.10 streaming constraint.** Side-channel `status`/`artifact` events are emitted with
+  `adispatch_custom_event` (config-explicit, 3.10-safe) and consumed via
+  `astream_events(version="v2")` `on_custom_event`. **Do not** use `get_stream_writer` /
+  `stream_mode="custom"` — it is 3.11+-async-only (contextvar) and the project supports 3.10.
+- **`recursion_limit` = `max_hops * 2 + 2`** (each agent↔tools round is 2 super-steps: agent
+  node + tools node, plus the final answering agent step). On `GraphRecursionError`, `run()`
+  yields a graceful "已达调用上限" chunk and ends the stream.
 
 ### Auth seam (above the waists, no `PROTOCOL_VERSION` bump)
 
@@ -133,7 +185,7 @@ These are enforced by design intent, not tooling — honor them when adding pack
 2. **Runtime never statically depends on any adapter** — discovered via the `agentkit.adapters`
    entry-point group at runtime.
 3. **Core has zero framework deps** (only `pydantic` + `xxhash`). `langchain` enters only at the
-   runtime layer (`agentkit-runtime`, M2 — orchestrator holds a `BaseChatModel` directly), never
+   runtime layer (`agentkit-runtime` — orchestrator holds a `BaseChatModel` directly), never
    the contracts.
 
 Profiles (`agentkit-bi`, future `agentkit-dcc`) version independently of `PROTOCOL_VERSION`.
@@ -150,7 +202,10 @@ SSE events that don't apply should be ignored by consumers (forward-compat), not
 
 The contract tests in `packages/agentkit-protocol/tests/` (`test_models.py`, `test_protocols.py`,
 `test_verbs.py`, `test_testing.py`) are the executable spec for the waists — they encode the
-round-trip, serialization, verb-catalogue, and adapter-Protocol invariants above.
+round-trip, serialization, verb-catalogue, and adapter-Protocol invariants above. The runtime
+package has its own `packages/agentkit-runtime/tests/test_smoke.py` (no real LLM call — uses a
+scripted `FakeMessagesListChatModel` to verify the `create_agent` + `astream_events` path,
+frontend-verb interrupt, and `GraphRecursionError` handling).
 
 ## Versioning & release
 

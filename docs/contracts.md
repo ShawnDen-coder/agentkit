@@ -159,13 +159,16 @@ short-lived/unlogged/uncached token - are enforced by the *implementations*, not
 
 ## What is NOT yet implemented (deferred)
 
-- `Orchestrator` - Protocol only in 0.1.0; `StatelessOrchestrator` (in `agentkit-runtime`)
-  still pending. The impl holds a langchain `BaseChatModel` directly and routes tool calls
-  (backend sync vs frontend FunctionCall) per Option B.
-- Live `VerbRegistry`, FastAPI app, SSE endpoint - M2. Packages `agentkit-runtime`,
-  `agentkit-mock-app`, `agentkit-cli` are scaffolded (M2 in progress); the auth seam
-  (`Authenticator`/`Authorizer`/`Principal`/`AuthContext`/`AuthzAction`) is frozen in
-  `agentkit_protocol.auth` (0.2.0+, no `PROTOCOL_VERSION` bump - it is above the waists).
+- `Orchestrator` - implemented in `agentkit-runtime` (M2) as `LanggraphOrchestrator`: it
+  drives a langchain v1 `create_agent` graph (agent↔tools loop, `recursion_limit` budget),
+  holds a langchain `BaseChatModel` directly, and routes tool calls per Option B
+  (backend sync via the adapter; frontend FunctionCall via `FrontendActionRequested`, the
+  stateless equivalent of `interrupt()` - no checkpointer, state lives in `request.messages`).
+- Live `VerbRegistry`, FastAPI app, SSE endpoint - the runtime is implemented; the
+  `agentkit.adapters` entry-point discovery, `agentkit-mock-app`, and `agentkit-cli` are not
+  yet present. The auth seam (`Authenticator`/`Authorizer`/`Principal`/`AuthContext`/
+  `AuthzAction`) is frozen in `agentkit_protocol.auth` (0.2.0+, no `PROTOCOL_VERSION` bump -
+  it is above the waists).
 - Real adapter (Superset) - M3. Multi-hop (`MAX_HOPS`) - M4. Skills - M5. MCP - M6.
 - `BiSemanticModel.calculated_fields` is optional (default `None`) pending the §14 Q1
   resolution at M3 (Superset + Metabase + Looker comparison).

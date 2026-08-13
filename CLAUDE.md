@@ -14,12 +14,17 @@ changing anything in `packages/agentkit-protocol`** — the contracts are intent
 
 ## Current repo state
 
-Only **`packages/agentkit-protocol`** (M1) is implemented. The README, `pyproject.toml`
-(`[tool.uv.sources]`), `docs/contracts.md`, and code docstrings reference many packages that
-do **not** yet exist in the repo: `agentkit-bi`, `agentkit-runtime`,
-`agentkit-mock-app`, `agentkit-cli`, `agentkit-mcp-gateway`, `agentkit-adapter-*`. Treat those
-as the planned layout (milestones M2–M8+), not present code. The README marking `agentkit-bi`
-as "M1 ✅" is ahead of the actual tree. `PROTOCOL_VERSION = "0.2.0"` in `agentkit_protocol.models`.
+**`packages/agentkit-protocol`** (M1) and **`packages/agentkit-runtime`** (M2) are
+implemented. `agentkit-runtime` ships `LanggraphOrchestrator`, the `Orchestrator` Protocol
+impl: it drives a langchain v1 `create_agent` graph (agent↔tools loop, `recursion_limit`
+budget), routes backend-sync verbs to the adapter and frontend verbs to a
+`CopilotFunctionCall` via `FrontendActionRequested` (the stateless equivalent of
+`interrupt()`), and streams the 6 SSE events. The README, `pyproject.toml`
+(`[tool.uv.sources]`), `docs/contracts.md`, and code docstrings still reference packages that
+do **not** yet exist in the repo: `agentkit-bi`, `agentkit-mock-app`, `agentkit-cli`,
+`agentkit-mcp-gateway`, `agentkit-adapter-*`. Treat those as the planned layout
+(milestones M3–M8+), not present code. The README marking `agentkit-bi` as "M1 ✅" is ahead of
+the actual tree. `PROTOCOL_VERSION = "0.2.0"` in `agentkit_protocol.models`.
 
 ## Commands
 

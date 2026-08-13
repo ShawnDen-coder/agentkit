@@ -27,6 +27,7 @@
 17. [附录 B:DCC 与桌面端扩展](#附录-bdcc-与桌面端扩展)
 18. [附录 C:仓库与包结构](#附录-c仓库与包结构)
 19. [附录 D:域中立与 Profile 分层](#附录-d域中立与-profile-分层)
+20. [附录 E:当前困境与 0.3.0 收窄计划](#附录-e当前困境与-030-收窄计划)
 
 ---
 
@@ -1097,6 +1098,66 @@ flowchart BT
 - **收益**:M8 接 DCC 时 core 零改动(只写 `agentkit-dcc` + DCC 适配器);core 真正可复用于任何"组件驱动"领域。
 - **风险**:泛化 `Component`/`ComponentSchema` 在没有真实 DCC 适配器前是推测性抽象。
 - **缓解**:`ComponentSchema` 做成多态信封(core 不解析内容),而非硬抽象;profile 自由演进 schema 不动 core。M3(Superset)与 M8(Maya)两个真实适配器验证信封设计。
+
+---
+
+## 附录 E:当前困境与 0.3.0 收窄计划
+
+> 状态(2026-08-14):M1(`agentkit-protocol`)+ M2(`agentkit-runtime`,`LanggraphOrchestrator`)已落地。本附录记录 M2 后审视发现的实现层困境与 0.3.0 收窄计划。**不改动已冻结的 0.2.0 契约面**;0.3.0 为 minor bump(additive)。
+
+### E.1 底层三原语(审视基线)
+
+框架的底层逻辑可归为三条原语,它们定义了 core 该留什么:
+
+1. **组件序列化** — 信封 round-trip(`Component`/`ComponentData`/`ComponentSchema`/`Artifact`,靠 `SerializeAsAny` + `extra="allow"`)。
+2. **按 `kind` 判别的多态分派** — schema 匹配(信封 `kind` 判别 + verb→adapter 方法绑定 + `AdapterCapabilities` 协商)。
+3. **界面状态机修改** — `Message.role` 状态机 + 4 前端 verb 经 FunctionCall 回环改前端 UI。
+
+LLM 是状态机的**驱动者**,藏在可替换的 `Orchestrator` Protocol 后面,不是原语。"代身份取数"(RLS)是横切不变量(`SessionContext.auth_token`),不是第 4 原语 —— 取数发生在 adapter(窄腰 ① 之下),框架只持安全约束。
+
+**该冻结的 = 三原语的 wire-visible 部分**。下面的困境本质都是"冻结面切厚了,把缝之外的东西也固化了"。
+
+### E.2 困境(M2 后发现)
+
+| # | 困境 | 证据 | 性质 |
+|---|---|---|---|
+| 1 | **7 后端 verb schema 冻进了 core,前端永远看不到** | `verbs.py` 冻结 11 个 verb;前端只看 4 个前端 verb | 冻结面过厚 |
+| 2 | **runtime 泄漏 BI profile 假设** | `_maybe_artifact` 嗅探 `columns`/`rows`(`tools.py`);`VERB_STATUS_LABELS` 硬编码中文 BI 标签 | 违反 §D.5 runtime profile 无关 |
+| 3 | **`Authorizer` per-verb RLS 是摆设** | `verb_tools` handler 直接调 adapter,从不调 `authorize`;example 只在请求边界调 `verb="query"` 一次 | 安全承诺未兑现 |
+| 4 | **`VerbBinding`/`VerbAlias`/`VerbBindings` 是死代码** | `verb_tools()` 直接从 `STANDARD_VERBS` 硬编码建 tool,不查 `VerbBindings` | 扩展轴 C(§9.1)不通 |
+| 5 | **`role=tool` 回环有损** | `Message` 不带 `tool_call_id`;`to_langchain_messages` 合成假 `call_id`、把结果当 args;隐含"每轮 ≤1 前端 verb"未强制 | wire 契约 gap |
+| 6 | **stub verb 暴露给 LLM** | `get_skill_content`/`execute_tool` raise `NotImplementedError` 却建成 tool,LLM 调用后重试烧 token/hops | 与 `MAX_HOPS` 交互恶化 |
+| 7 | **无 tool 注入 hook** | `create_agent(tools=verb_tools(adapter))` 在 `__init__` 固化;加 `@tool` 需子类化 | 扩展不 idiomatic |
+
+**根因统一**:core 把缝之外的东西(后端 verb schema、孤儿消息容忍、artifact 嗅探、HITL 异常)也固化了,逼 runtime 手写翻译层(`create_model` 合成、orphan 合成、`_maybe_artifact`),而这些恰恰是与 langchain 生态融合时该让原生形态自然长出来的地方。
+
+### E.3 0.3.0 收窄计划
+
+原则:**冻结面收窄到三原语的 wire-visible 部分;后端 verb、artifact 映射、HITL 机制退回 runtime/adapter,让 langchain/langgraph 原生形态在那里自然落地。** 不碰 0.2.0 已冻结面;0.3.0 为 minor bump。
+
+1. **冻结面收窄** — core 只留 4 前端 verb(窄腰 ② 的一部分)+ 信封模型 + 6 SSE 事件 + `ComponentAdapter` Protocol。7 后端 verb 退回 runtime/adapter 领地,adapter 直接用 langchain `@tool`/`BaseTool` 暴露,schema 从函数签名推导。删 `verb_tools` 的 `create_model` 合成层与 `_maybe_artifact` 嗅探。
+2. **artifact 映射下沉 profile** — 改为 profile 注入 `to_artifact(data) -> Artifact | None` hook;runtime 不再猜数据形状(DCC `ComponentData` 不会被 BI 嗅探误判)。
+3. **接线扩展点** — `LanggraphOrchestrator.__init__` 开 `extra_tools: list[BaseTool] = []` 参数;skill(M5)/MCP(M6)以 langchain 原生 tool 注入,零抽象。`VerbBindings`/`VerbAlias` 要么真接进 `verb_tools` 的解析,要么撤回(若后端 verb 退回 adapter 后已无必要)。
+4. **补 authz wiring + 去 config 魔法** — verb tool 在 handler 前 `await authorizer.authorize(...)`;`SessionContext` 经 runtime 明确入参传递,而非 `config["configurable"]["ctx"]` 隐式约定。
+5. **收紧 `role=tool` 契约(minor bump)** — `Message` 与 `CopilotFunctionCall` 加 `tool_call_id: str | None`(additive optional);前端回环时回送;删 `to_langchain_messages` 的 orphan 合成,改用 langchain `convert_to_messages`。
+6. **过滤 stub verb** — `get_skill_content`/`execute_tool` 在 M4/M6 落地前不暴露给 LLM(按 `AdapterCapabilities` 或显式开关)。
+
+### E.4 不变的东西
+
+收窄不等于推翻。以下保持不动:
+
+- **两个窄腰**(`ComponentAdapter` Protocol + 6 SSE 事件)—— 可迁移性的根基。
+- **Option B**(后端同步取数 + 前端 FunctionCall 仅留给 UI 动作)—— 与 OpenBB 的根本分歧。
+- **无状态后端**(状态全在 `request.messages`)—— 可嵌入自部署的前提。
+- **core 域中立 + 多态信封**(`SerializeAsAny` + `extra="allow"`)—— M8 接 DCC 零改 core 的保证。
+- **RLS 横切不变量**(`SessionContext.auth_token`,`SecretStr(exclude=True)`,走 header)—— 安全红线。
+- **LLM 是可替换驱动者**(藏在 `Orchestrator` Protocol 后)—— 不进 core。
+
+### E.5 与 langchain/langgraph 生态的关系
+
+runtime 内部用 `create_agent`(langgraph agent↔tools 图)+ `ToolErrorMiddleware`(langchain 中间件)+ `astream_events(v2)`,这些是**必要的融合**(SSE wire ≠ langgraph 事件流,映射不可避免;无状态契约 ≠ langgraph checkpointer,FunctionCall 回环是必要代价)。
+
+不必要的是:把后端 verb 冻进 core 逼出的 `create_model` 合成、孤儿容忍逼出的 `to_langchain_messages` 合成、profile 中立破坏逼出的 `_maybe_artifact`。**收窄冻结面后,这些翻译层随之消失,runtime 回到 idiomatic langchain 形态** —— 这就是 0.3.0 的目标。
 
 ---
 

@@ -1,39 +1,85 @@
-"""Tool schemas + handlers binding the 11 ``STANDARD_VERBS`` to adapter methods.
+"""Verb tools: bind the 11 ``STANDARD_VERBS`` to langchain ``BaseTool`` objects.
 
 Per Option B (§D.4), the LLM sees all 11 verbs as langchain tools (it does not know
-which are backend vs. frontend). The orchestrator routes: backend verbs execute
-synchronously via the adapter; frontend verbs raise ``FrontendActionRequested`` so the
-orchestrator's ``run()`` can yield a ``CopilotFunctionCall`` and end the stream.
+which are backend vs. frontend). ``create_agent`` (langchain v1) drives the agent↔tools
+loop; each verb is a ``StructuredTool`` whose coroutine:
 
-``VerbSpec.input_schema`` is already JSON Schema — ``bind_tools`` accepts the raw
-OpenAI function-calling dict format directly, so no pydantic ``args_schema`` conversion
-is needed.
+  * **frontend verb** -> raises ``FrontendActionRequested`` so the orchestrator's
+    ``run()`` can yield a ``CopilotFunctionCall`` and end the stream (Option B
+    frontend round-trip). This is the stateless equivalent of langgraph ``interrupt()``
+    (which would require a checkpointer, breaking the frozen stateless contract).
+  * **backend verb** -> calls the matching ``ComponentAdapter`` method, emits
+    ``status``/``artifact`` side-channel events via ``adispatch_custom_event``, and
+    returns the result as JSON.
+
+``ToolErrorMiddleware`` (wired in the orchestrator) turns ``NotImplementedError`` (the
+skill/MCP stubs) into an error ``ToolMessage`` for LLM recovery and lets
+``FrontendActionRequested`` propagate.
+
+LLM-facing schema: each tool's ``args_schema`` is a pydantic model built from the frozen
+``VerbSpec.input_schema``. The derived OpenAI schema is functionally equivalent (required
+fields/types match); optional fields carry an additive ``default: null`` and object/array
+fields carry ``additionalProperties``/``items`` (pydantic defaults). The frozen
+``VerbSpec.input_schema`` in the protocol package remains the authoritative source.
+
+Streaming note: we emit via ``adispatch_custom_event`` (config-explicit, 3.10-safe) and
+consume via ``astream_events(version="v2")`` ``on_custom_event``. ``get_stream_writer`` /
+``stream_mode="custom"`` is 3.11+-async-only (contextvar) and cannot be used - the project
+supports Python 3.10.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any
+
+from langchain_core.callbacks import adispatch_custom_event
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel
+from pydantic import create_model
 
 from agentkit_protocol import STANDARD_VERBS
 from agentkit_protocol import ComponentAdapter
 from agentkit_protocol import Refinement
 from agentkit_protocol import SessionContext
+from agentkit_protocol import TableArtifact
+from agentkit_protocol import VerbSpec
 from agentkit_protocol.protocols import VerbHandler
 
 
-__all__ = ["FRONTEND_VERB_NAMES", "FrontendActionRequested", "build_tool_handlers", "verb_tool_schemas"]
+__all__ = [
+    "FRONTEND_VERB_NAMES",
+    "VERB_STATUS_LABELS",
+    "FrontendActionRequested",
+    "verb_tools",
+]
 
 
 # Verb names that execute on the frontend (yield CopilotFunctionCall, end stream).
 FRONTEND_VERB_NAMES: set[str] = {v.name for v in STANDARD_VERBS if v.executes_on == "frontend"}
 
 
+# Chinese status labels per verb (consistency with FakeOrchestrator).
+VERB_STATUS_LABELS: dict[str, str] = {
+    "get_catalog": "正在获取目录",
+    "get_component_data": "正在获取数据",
+    "get_selection": "正在获取选择",
+    "get_semantic_model": "正在获取语义模型",
+    "refine_component": "正在精炼组件",
+    "get_skill_content": "正在获取技能内容",
+    "execute_tool": "正在执行工具",
+}
+
+
 class FrontendActionRequested(Exception):
-    """Raised by a frontend-verb handler to break out of the langgraph loop.
+    """Raised by a frontend-verb tool to break out of the ``create_agent`` loop.
 
     Carries the verb name + arguments so ``LanggraphOrchestrator.run`` can yield a
     ``CopilotFunctionCall`` SSE event and end the stream. The frontend executes the UI
-    action and re-POSTs with ``role=tool`` to resume.
+    action and re-POSTs with ``role=tool`` to resume. This is the stateless equivalent
+    of langgraph ``interrupt()`` (which requires a checkpointer).
     """
 
     def __init__(self, name: str, arguments: dict[str, Any]) -> None:
@@ -43,32 +89,14 @@ class FrontendActionRequested(Exception):
         self.arguments = arguments
 
 
-def verb_tool_schemas() -> list[dict[str, Any]]:
-    """Build the OpenAI function-calling tool dict list for ``bind_tools``.
-
-    Each ``VerbSpec`` is already JSON-Schema-shaped, so this is a 1:1 mapping — no
-    pydantic ``args_schema`` conversion.
-    """
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": v.name,
-                "description": v.description,
-                "parameters": v.input_schema,
-            },
-        }
-        for v in STANDARD_VERBS
-    ]
-
-
-def build_tool_handlers(adapter: ComponentAdapter) -> dict[str, VerbHandler]:
-    """Bind each verb name to an async handler that calls the adapter.
+def _backend_handlers(adapter: ComponentAdapter) -> dict[str, VerbHandler]:
+    """Bind each backend verb name to an async handler that calls the adapter.
 
     Backend verbs (7) call the matching ``ComponentAdapter`` method. The 2 unimplemented
     backend verbs (``get_skill_content``, ``execute_tool``) raise ``NotImplementedError``
-    so the ``tools_node`` can turn them into a ``ToolMessage`` for LLM recovery.
-    Frontend verbs (4) raise ``FrontendActionRequested`` to end the stream.
+    so ``ToolErrorMiddleware`` can turn them into a ``ToolMessage`` for LLM recovery.
+    Frontend verbs (4) are NOT here - their tool coroutine raises
+    ``FrontendActionRequested`` directly.
     """
 
     async def _get_catalog(ctx: SessionContext, args: dict[str, Any]) -> dict[str, Any]:
@@ -107,13 +135,7 @@ def build_tool_handlers(adapter: ComponentAdapter) -> dict[str, VerbHandler]:
     async def _execute_tool(ctx: SessionContext, args: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError("MCP gateway is M6")
 
-    def _frontend(name: str) -> VerbHandler:
-        async def _raise(ctx: SessionContext, args: dict[str, Any]) -> dict[str, Any]:
-            raise FrontendActionRequested(name, args)
-
-        return _raise
-
-    handlers: dict[str, VerbHandler] = {
+    return {
         "get_catalog": _get_catalog,
         "get_selection": _get_selection,
         "get_component_data": _get_component_data,
@@ -122,6 +144,83 @@ def build_tool_handlers(adapter: ComponentAdapter) -> dict[str, VerbHandler]:
         "get_skill_content": _get_skill_content,
         "execute_tool": _execute_tool,
     }
-    for name in FRONTEND_VERB_NAMES:
-        handlers[name] = _frontend(name)
-    return handlers
+
+
+def _maybe_artifact(result: dict[str, Any]) -> Any:
+    """Peek at a handler result dict; if it looks like tabular ComponentData, build an Artifact.
+
+    Handlers return ``model_dump()`` dicts. A ``ComponentData`` dump carries ``kind`` +
+    (for BI tables) ``columns``/``rows``. Matches ``FakeOrchestrator._to_artifact``.
+    """
+    kind = result.get("kind")
+    if kind is None:
+        return None
+    if "columns" in result and "rows" in result:
+        return TableArtifact(
+            columns=list(result["columns"]),
+            rows=[list(r) for r in result["rows"]],
+        )
+    return None
+
+
+_JSON_TYPE_TO_PY: dict[str, type] = {
+    "string": str,
+    "integer": int,
+    "number": float,
+    "boolean": bool,
+    "object": dict,
+    "array": list,
+}
+
+
+def _args_schema_for(spec: VerbSpec) -> type[BaseModel]:
+    """Build a pydantic ``args_schema`` from the frozen ``VerbSpec.input_schema``.
+
+    Flat JSON Schemas only (the standard verbs are flat). Required fields become required
+    pydantic fields; optional fields get ``default=None``. The derived OpenAI schema is
+    functionally equivalent to ``spec.input_schema`` (see module docstring).
+    """
+    props = spec.input_schema.get("properties", {})
+    required = set(spec.input_schema.get("required", []))
+    fields: dict[str, Any] = {}
+    for name, js in props.items():
+        py_type = _JSON_TYPE_TO_PY.get(js.get("type", ""), Any)
+        fields[name] = (py_type, ...) if name in required else (py_type, None)
+    return create_model(f"{spec.name}_args", **fields) if fields else create_model(f"{spec.name}_args")
+
+
+def _make_verb_tool(spec: VerbSpec, handler: VerbHandler | None) -> BaseTool:
+    """Build a ``StructuredTool`` for one verb.
+
+    Frontend verbs (``handler is None``) raise ``FrontendActionRequested``. Backend verbs
+    emit a ``status`` event, call the handler (which may raise ``NotImplementedError`` ->
+    ``ToolErrorMiddleware`` -> ``ToolMessage``), emit an ``artifact`` event if the result
+    looks tabular, and return the result as JSON.
+    """
+
+    async def _run(config: RunnableConfig, **args: Any) -> str:
+        if spec.executes_on == "frontend":
+            raise FrontendActionRequested(spec.name, args)
+        assert handler is not None  # backend verbs always have a handler
+        ctx: SessionContext = config["configurable"]["ctx"]
+        label = VERB_STATUS_LABELS.get(spec.name, spec.name)
+        await adispatch_custom_event("status", {"status": "running", "label": label}, config=config)
+        result = await handler(ctx, args)
+        artifact = _maybe_artifact(result)
+        if artifact is not None:
+            await adispatch_custom_event("artifact", {"artifact": artifact}, config=config)
+        return json.dumps(result)
+
+    return StructuredTool.from_function(
+        None,
+        coroutine=_run,
+        name=spec.name,
+        description=spec.description,
+        args_schema=_args_schema_for(spec),
+    )
+
+
+def verb_tools(adapter: ComponentAdapter) -> list[BaseTool]:
+    """Build the 11 verb tools (one per ``STANDARD_VERBS``) for ``create_agent``."""
+    handlers = _backend_handlers(adapter)
+    return [_make_verb_tool(spec, handlers.get(spec.name)) for spec in STANDARD_VERBS]
