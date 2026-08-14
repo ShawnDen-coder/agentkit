@@ -21,9 +21,11 @@ uv run --env-file .env --with fastapi --with uvicorn --with langchain-openai pyt
   (widget 目录 + 罐头表格数据)。这是厂商 adapter 唯一要实现的契约。
 - **Auth 缝隙**:`backend.py` 在 SSE 路径**之前**跑 `Authenticator` -> `Principal` ->
   `session_from_principal` -> `SessionContext`。`auth_token` 走 `Authorization` header
-  (绝不走 body)。`AllowAllAuthorizer` 顶替真实的按动词 RLS。
-- **Option B 前端往返**:收到 `copilotFunctionCall` 时,浏览器执行 UI 动作(往仪表盘加一个
-  widget),然后带 `role=tool` 重新 POST 以恢复流。
+  (绝不走 body)。`AllowAllAuthorizer` 传给 `LanggraphOrchestrator`(0.3.0:per-verb RLS 在
+  tool 内部执行,不再是请求边界的占位)。
+- **0.3.0 有状态 interrupt/resume**:收到 `copilotFunctionCall`(带 `tool_call_id`)时,浏览器
+  执行 UI 动作(往仪表盘加 widget),然后用**同一个 `thread_id` + `resume`** 重新 POST 恢复流
+  (不重发 messages;checkpointer 持有暂停状态)。
 
 ## 文件
 
@@ -33,8 +35,8 @@ uv run --env-file .env --with fastapi --with uvicorn --with langchain-openai pyt
 
 ## `agentkit-runtime` 已落地
 
-本示例已接入 `LanggraphOrchestrator`(M2,langgraph StateGraph)。`FakeOrchestrator`
-保留在 `example/_common/` 作为无 LLM 的教学回退——换回它只需改一行 import。
+本示例已接入 `LanggraphOrchestrator`(0.3.0,langchain `create_agent` + langgraph `interrupt()`)。
+`FakeOrchestrator` 保留在 `example/_common/` 作为无 LLM 的教学回退 —— 换回它只需改一行 import。
 
 ## 关于 LLM
 

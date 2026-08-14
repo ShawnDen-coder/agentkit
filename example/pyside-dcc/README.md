@@ -22,8 +22,9 @@ uv run --env-file .env --with pyside6 --with qasync --with langchain-openai pyth
   `ComponentAdapter` 契约;领域差异只是信封 `kind`(`dcc.node` vs `bi.semantic`)。
 - **用 qasync 做异步**:`qasync` 把 asyncio loop 接到 Qt 事件循环上,async 的
   `orchestrator.run()` 跟 Qt 控件一起跑。async 路径里的 UI 更新在 Qt 线程上。
-- **Option B 进程内往返**:收到 `copilotFunctionCall` 时,UI 执行动作(往场景树加一个节点),
-  然后带 `role=tool` 消息重新调 `run()`--没有 HTTP 断连,就是进程内恢复。
+- **0.3.0 有状态 interrupt/resume**(进程内):收到 `copilotFunctionCall`(带 `tool_call_id`)时,
+  UI 执行动作(往场景树加节点),然后用**同一个 `thread_id` + `resume`** 重新调 `run()` 恢复
+  (不重发 messages;checkpointer 持有暂停状态)。没有 HTTP 断连,就是进程内恢复。
 
 ## 文件
 
@@ -32,9 +33,9 @@ uv run --env-file .env --with pyside6 --with qasync --with langchain-openai pyth
 
 ## `agentkit-runtime` 已落地
 
-本示例已接入 `LanggraphOrchestrator`(M2,langgraph StateGraph)。orchestrator 无状态:
-每次从 `request.messages` 重建 langgraph 消息,不用 checkpointer(状态全在 messages 里)。
-`FakeOrchestrator` 保留在 `example/_common/` 作为无 LLM 回退——换回它只需改一行 import。
+本示例已接入 `LanggraphOrchestrator`(0.3.0,langchain `create_agent` + langgraph `interrupt()`)。
+有状态:`thread_id` + checkpointer 持有暂停状态,resume 用 `Command(resume=...)`。
+`FakeOrchestrator` 保留在 `example/_common/` 作为无 LLM 回退 —— 换回它只需改一行 import。
 
 ## DCC profile 下的 auth
 
