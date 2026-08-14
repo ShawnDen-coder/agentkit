@@ -49,7 +49,6 @@ from agentkit_protocol import ComponentAdapter
 from agentkit_protocol import CopilotFunctionCall
 from agentkit_protocol import CopilotMessageArtifact
 from agentkit_protocol import CopilotMessageChunk
-from agentkit_protocol import CopilotPromptSuggestions
 from agentkit_protocol import CopilotStatusUpdate
 from agentkit_protocol import Principal
 from agentkit_protocol import QueryRequest
@@ -59,13 +58,6 @@ from agentkit_runtime.frontend_tools import build_frontend_tools
 
 
 __all__ = ["LanggraphOrchestrator"]
-
-
-_CANNED_SUGGESTIONS: list[str] = [
-    "再看一个组件",
-    "按地区筛选",
-    "解释一下这些数字",
-]
 
 
 async def _on_tool_error(exc: Exception, request: Any) -> str | None:
@@ -202,8 +194,6 @@ class LanggraphOrchestrator:
         except GraphRecursionError:
             yield CopilotMessageChunk(text="已达调用上限。")
             return
-
-        yield CopilotPromptSuggestions(suggestions=_CANNED_SUGGESTIONS)
 
 
 def _map_event(ev: dict[str, Any]) -> BaseSSE | None:

@@ -34,7 +34,6 @@ from agentkit_protocol import ComponentData
 from agentkit_protocol import ComponentSchema
 from agentkit_protocol import CopilotFunctionCall
 from agentkit_protocol import CopilotMessageChunk
-from agentkit_protocol import CopilotPromptSuggestions
 from agentkit_protocol import CopilotStatusUpdate
 from agentkit_protocol import Message
 from agentkit_protocol import Orchestrator
@@ -184,8 +183,7 @@ async def test_orchestrator_multihop_backend_loop() -> None:
     # Two get_catalog calls -> two "running" status events with the catalog label.
     labels = [e.label for e in events if isinstance(e, CopilotStatusUpdate) and e.label]
     assert labels.count("正在获取目录") == 2
-    # Stream completed normally -> suggestions present, no FunctionCall.
-    assert any(isinstance(e, CopilotPromptSuggestions) for e in events)
+    # Stream completed normally -> no FunctionCall.
     assert not any(isinstance(e, CopilotFunctionCall) for e in events)
 
 
@@ -198,8 +196,6 @@ async def test_orchestrator_recursion_limit_graceful() -> None:
     events = [e async for e in orch.run(_request("loop"))]
     chunks = [e for e in events if isinstance(e, CopilotMessageChunk)]
     assert any("已达调用上限" in c.text for c in chunks)
-    # Recursion ended the stream early -> no prompt suggestions.
-    assert not any(isinstance(e, CopilotPromptSuggestions) for e in events)
 
 
 async def test_system_prompt_is_prepended_to_model_calls() -> None:

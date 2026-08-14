@@ -22,7 +22,6 @@ from PySide6.QtWidgets import QWidget
 
 from agentkit_protocol import CopilotMessageArtifact
 from agentkit_protocol import CopilotMessageChunk
-from agentkit_protocol import CopilotPromptSuggestions
 from agentkit_protocol import CopilotStatusUpdate
 from agentkit_protocol import Message
 from agentkit_protocol import QueryRequest
@@ -120,16 +119,15 @@ class ChatPanel(QDockWidget):
                     self._stream_chunk(event.text)
                     continue
                 if isinstance(event, CopilotStatusUpdate):
-                    self.setWindowTitle(f"Copilot — {event.label or event.status}")
-                    if self._streaming:
-                        self._stream_interrupted = True
+                    label = event.label or event.status
+                    self.setWindowTitle(f"Copilot — {label}")
+                    # Show thinking/tool status inline in the chat (gray italic).
+                    self._end_stream()
+                    self._append("status", f"<i>{label}</i>")
                     continue
                 self._end_stream()
                 if isinstance(event, CopilotMessageArtifact):
                     self._append("assistant", f"<i>[artifact: {type(event.artifact).__name__}]</i>")
-                elif isinstance(event, CopilotPromptSuggestions):
-                    suggestions = " · ".join(event.suggestions)
-                    self._append("assistant", f"<i>建议:{suggestions}</i>")
             self._end_stream()
             self._flush_assistant()
         except Exception as e:
@@ -165,8 +163,12 @@ class ChatPanel(QDockWidget):
 
     def _append(self, role: str, html: str) -> None:
         """Append a paragraph to the chat log."""
-        label = {"human": "我", "assistant": "助手"}.get(role, role)
-        color = "#2563eb" if role == "assistant" else "#888"
-        self.chat.append(
-            f'<p style="margin:4px 0;color:{color}"><b>{label}</b> {html}</p>'
-        )
+        label = {"human": "我", "assistant": "助手"}.get(role, "")
+        if role == "status":
+            # Gray italic for thinking/tool status.
+            self.chat.append(f'<p style="margin:2px 0;color:#999;font-style:italic">{html}</p>')
+        else:
+            color = "#2563eb" if role == "assistant" else "#888"
+            self.chat.append(
+                f'<p style="margin:4px 0;color:{color}"><b>{label}</b> {html}</p>'
+            )
