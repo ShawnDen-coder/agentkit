@@ -27,7 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "_common"))
 
 from agentkit_runtime import LanggraphOrchestrator
 from chat_panel import ChatPanel
-from langchain_core.tools import tool
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import StructuredTool
 from node_adapter import NodeGraphQtAdapter
 from NodeGraphQt import NodeGraph
 from nodes import MATH_NODES
@@ -166,8 +167,8 @@ class MainWindow(QMainWindow):
         """
         graph = self._graph
 
-        @tool
-        def build_graph(
+        async def _build_graph(
+            config: RunnableConfig,
             nodes: list[NodeSpec] | None = None,
             connections: list[ConnectionSpec] | None = None,
         ) -> str:
@@ -225,7 +226,21 @@ class MainWindow(QMainWindow):
                 summary += f", errors: {'; '.join(errors)}"
             return summary
 
-        return build_graph
+        # StructuredTool with coroutine: runs on the asyncio loop (= Qt main
+        # thread via qasync), NOT in a thread pool. Sync @tool would run in a
+        # ThreadPoolExecutor and Qt operations would fail ("Timers cannot be
+        # started from another thread").
+        return StructuredTool.from_function(
+            None,
+            coroutine=_build_graph,
+            name="build_graph",
+            description=(
+                "Build a node graph from a serialized spec: create nodes + connect ports. "
+                'Call with nodes=[{"type": "NumberNode", "name": "num50", "properties": {"value": 50}}, ...] '
+                'and connections=[{"source": "num50", "source_port": 0, "target": "add1", "target_port": 0}, ...].'
+            ),
+            args_schema=GraphSpec,
+        )
 
     def _find_node(self, name: str) -> Any | None:
         """Find a node by display name."""
