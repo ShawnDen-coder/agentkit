@@ -13,8 +13,7 @@
 
 ```bash
 export OPENROUTER_API_KEY="sk-or-v1-..."
-uv run --with NodeGraphQt --with PySide6 --with qasync --with langchain-openai \
-    python example/node-editor/app.py
+uv run --with NodeGraphQt --with PySide6 --with qasync --with langchain-openai python example/node-editor/app.py
 ```
 
 ## 你会看到什么

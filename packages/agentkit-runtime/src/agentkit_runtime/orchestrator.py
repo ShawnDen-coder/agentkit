@@ -30,6 +30,7 @@ Non-obvious invariants a future change must preserve:
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -178,10 +179,22 @@ class LanggraphOrchestrator:
             input_payload = {"messages": messages}
 
         try:
-            async for ev in self._agent.astream_events(input_payload, version="v2", config=config):
-                sse = _map_event(ev)
-                if sse is not None:
-                    yield sse
+            events = self._agent.astream_events(input_payload, version="v2", config=config)
+            try:
+                async for ev in events:
+                    sse = _map_event(ev)
+                    if sse is not None:
+                        yield sse
+            finally:
+                # Explicitly close the astream_events generator. When the consumer
+                # (e.g. ChatPanel) returns early after a CopilotFunctionCall,
+                # GeneratorExit is thrown into run() at the yield point. The
+                # implicit async-for cleanup calls aclose() on astream_events, but
+                # langgraph's generator doesn't handle GeneratorExit cleanly
+                # (RuntimeError: async generator ignored GeneratorExit). We close
+                # it ourselves and suppress the cleanup error.
+                with contextlib.suppress(Exception):
+                    await events.aclose()
         except GraphInterrupt:
             # Fallback if not caught via on_tool_error (defensive — normally
             # the interrupt surfaces as on_tool_error and _map_event handles it).
