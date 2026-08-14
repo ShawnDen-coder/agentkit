@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import uuid
 from pathlib import Path
 
 
@@ -77,6 +78,7 @@ class MainWindow(QMainWindow):
             ),
         )
         self._messages: list[Message] = []
+        self._thread_id: str | None = None  # 0.3.0: stateful thread for interrupt/resume
         self._tasks: set[asyncio.Task[None]] = set()  # keep refs so tasks aren't GC'd
         self._streaming = False  # True while streaming an assistant message inline
         self._stream_interrupted = False  # True when a status interlude paused the stream
@@ -119,7 +121,9 @@ class MainWindow(QMainWindow):
         self.input.clear()
         self._messages.append(Message(role="human", content=text))
         self._append("human", text)
-        self._spawn(self._run())
+        # New human turn = new thread (interrupt/resume happens within _run).
+        self._thread_id = f"thread-{uuid.uuid4()}"
+        self._spawn(self._run(resume=None))
 
     def _spawn(self, coro):
         """Schedule coro on the loop; keep a ref so it isn't garbage-collected."""
@@ -127,16 +131,36 @@ class MainWindow(QMainWindow):
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _run(self) -> None:
-        """Drive the orchestrator and dispatch BaseSSE events directly (no to_sse)."""
-        req = QueryRequest(
-            messages=self._messages,
-            session_context=SessionContext(
-                user_identity="dcc-user",
-                workspace_id="ws-dcc",
-                trace_id="trace-dcc",
-            ),
-        )
+    async def _run(self, resume: dict | None = None) -> None:
+        """Drive the orchestrator and dispatch BaseSSE events directly (no to_sse).
+
+        0.3.0: stateful mode. First call sends messages + thread_id. On
+        CopilotFunctionCall, the frontend executes the UI action and re-calls
+        _run(resume={result, tool_call_id}) with the SAME thread_id — the
+        checkpointer resumes the paused graph via Command(resume=...).
+        """
+        if resume is not None:
+            # Resume from interrupt: don't resend messages, just thread_id + resume.
+            req = QueryRequest(
+                messages=[],
+                session_context=SessionContext(
+                    user_identity="dcc-user",
+                    workspace_id="ws-dcc",
+                    trace_id="trace-dcc",
+                ),
+                thread_id=self._thread_id,
+                resume=resume,
+            )
+        else:
+            req = QueryRequest(
+                messages=self._messages,
+                session_context=SessionContext(
+                    user_identity="dcc-user",
+                    workspace_id="ws-dcc",
+                    trace_id="trace-dcc",
+                ),
+                thread_id=self._thread_id,
+            )
         self._assistant_buf = ""  # reset for this turn
         self._set_status("思考中")
         try:
@@ -155,23 +179,17 @@ class MainWindow(QMainWindow):
                 if isinstance(event, CopilotMessageArtifact):
                     self._render_artifact(event.artifact)
                 elif isinstance(event, CopilotFunctionCall):
-                    # Option B in-process: execute the UI action, then re-run with role=tool.
+                    # Option B in-process: execute the UI action, then resume via thread_id.
                     self._append("assistant", f"<i>-> 前端执行:{event.name}({event.arguments})</i>")
                     self._execute_ui_action(event)
-                    # Discard the prelude (buf) - the orchestrator synthesizes the
-                    # assistant tool_call on resume (Message has no tool_calls field).
                     self._assistant_buf = ""
-                    # 0.3.0: tool_call_id tightens the round-trip (lets the orchestrator
-                    # faithfully reconstruct the ToolMessage without fake call ids).
-                    self._messages.append(
-                        Message(
-                            role="tool",
-                            name=event.name,
-                            data={"added": True, **event.arguments},
-                            tool_call_id=event.tool_call_id,
+                    # 0.3.0: resume with the SAME thread_id + Command(resume=result).
+                    # The orchestrator's checkpointer holds the paused graph state.
+                    self._spawn(
+                        self._run(
+                            resume={"result": "added", "tool_call_id": event.tool_call_id}
                         )
                     )
-                    self._spawn(self._run())  # resume the round-trip
                     return
                 elif isinstance(event, CopilotPromptSuggestions):
                     self._append("assistant", "<i>建议:" + " · ".join(event.suggestions) + "</i>")

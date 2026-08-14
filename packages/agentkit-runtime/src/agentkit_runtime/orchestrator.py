@@ -218,6 +218,7 @@ def _map_event(ev: dict[str, Any]) -> BaseSSE | None:
                 return CopilotFunctionCall(
                     name=tool_name,
                     arguments=value if isinstance(value, dict) else {"value": value},
+                    tool_call_id=interrupt_obj.id,  # langgraph interrupt id (string)
                 )
         return None
 

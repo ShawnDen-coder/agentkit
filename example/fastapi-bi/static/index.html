@@ -42,6 +42,7 @@
 <script>
 const TOKEN = "demo-token-123";
 let messages = [];
+let threadId = null;  // 0.3.0: stateful thread_id for interrupt/resume
 
 const $ = (id) => document.getElementById(id);
 const msgs = $("messages"), widgets = $("widgets");
@@ -64,11 +65,16 @@ function renderTable(artifact) {
 
 // POST the QueryRequest and stream the SSE response. EventSource is GET-only, so
 // we parse the SSE frames manually from the fetch ReadableStream.
-async function runQuery() {
+async function runQuery(resume = null) {
+  // 0.3.0: stateful mode. First call sends messages + thread_id. On resume from
+  // a CopilotFunctionCall, sends thread_id + resume (no message resend).
+  const body = resume !== null
+    ? { thread_id: threadId, resume }
+    : { messages, thread_id: threadId };
   const resp = await fetch("/v1/query", {
     method: "POST",
     headers: { "Authorization": `Bearer ${TOKEN}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify(body),
   });
   if (!resp.ok) { add("assistant", `<div class="status">错误 ${resp.status}</div>`); return; }
 
@@ -105,12 +111,12 @@ async function handle(event, data) {
       add("assistant", `<div>${data.text}</div>`);
       break;
     case "copilotFunctionCall":
-      // Option B: the backend yielded a frontend UI action and ended the stream.
-      // The frontend executes it, then re-POSTs role=tool to resume.
+      // 0.3.0: the backend paused via interrupt(). The frontend executes the UI
+      // action, then resumes with the SAME thread_id + resume payload (no message
+      // resend — the checkpointer holds the conversation state).
       add("assistant", `<div class="fc">-> 前端执行:${data.name}(${JSON.stringify(data.arguments)})</div>`);
       executeUiAction(data.name, data.arguments);
-      messages.push({ role: "tool", name: data.name, data: { added: true, ...data.arguments } });
-      await runQuery();  // resume the round-trip
+      await runQuery({ result: "added", tool_call_id: data.tool_call_id });
       break;
     case "copilotPromptSuggestions":
       const btns = data.suggestions.map(s => `<button onclick="$('input').value='${s}';$('send').click()">${s}</button>`).join("");
@@ -135,6 +141,8 @@ async function send() {
   $("input").value = "";
   messages.push({ role: "human", content: text });
   add("human", `<div>${text}</div>`);
+  // 0.3.0: new human turn = new thread (interrupt/resume happens within runQuery).
+  threadId = "thread-" + crypto.randomUUID();
   await runQuery();
 }
 
