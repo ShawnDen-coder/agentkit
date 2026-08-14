@@ -7,11 +7,10 @@ Run (from repo root):
         python example/node-editor/app.py
 
 A PySide6 ``QMainWindow`` with a NodeGraphQt graph (left) + a docked
-``ChatPanel`` (right). The user types natural-language commands; the LLM
-calls frontend-verb tools (``add_component_to_dashboard``, ``connect_nodes``,
-...) which ``interrupt()`` the langgraph graph. ``ChatPanel`` catches the
-``CopilotFunctionCall`` SSE, calls ``MainWindow._execute_fc`` to mutate the
-NodeGraphQt graph, and resumes with ``thread_id + resume`` (0.3.0 stateful).
+``ChatPanel`` (right). The user types natural-language commands; the LLM calls
+``build_graph`` with a serialized graph spec (nodes + connections) which the
+backend deserializes into NodeGraphQt nodes and pipes — one tool call, no
+interrupt/resume round-trip.
 """
 
 from __future__ import annotations
@@ -28,48 +27,110 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "_common"))
 
 from agentkit_runtime import LanggraphOrchestrator
 from chat_panel import ChatPanel
+from langchain_core.tools import tool
 from node_adapter import NodeGraphQtAdapter
 from NodeGraphQt import NodeGraph
 from nodes import MATH_NODES
 from openrouter import make_openrouter_llm
+from pydantic import BaseModel
+from pydantic import Field
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 from PySide6.QtWidgets import QMainWindow
 from qasync import QEventLoop
 
-from agentkit_protocol import CopilotFunctionCall
-
 
 __all__ = ["MainWindow", "main"]
 
 
-# System prompt teaches the LLM the component_id format + available node types.
+# ---------------------------------------------------------------------------
+# Graph serialization schema (the structured data the LLM generates)
+# ---------------------------------------------------------------------------
+
+
+class NodeSpec(BaseModel):
+    """A node in the serialized graph spec."""
+
+    type: str = Field(..., description="Node type (NumberNode, AddNode, ...)")
+    name: str = Field(..., description="Unique node name")
+    properties: dict[str, Any] = Field(
+        default_factory=dict, description='Node properties (e.g. {"value": 50} for NumberNode)'
+    )
+
+
+class ConnectionSpec(BaseModel):
+    """A connection between two nodes' ports."""
+
+    source: str = Field(..., description="Source node name")
+    source_port: int = Field(0, description="Source node output port index")
+    target: str = Field(..., description="Target node name")
+    target_port: int = Field(0, description="Target node input port index")
+
+
+class GraphSpec(BaseModel):
+    """A complete serialized node graph: nodes + connections.
+
+    The LLM generates this structure in one tool call; the backend deserializes
+    it into NodeGraphQt nodes + pipes. This is the component serialization/
+    deserialization approach — the graph is a single structured payload, not
+    a sequence of individual add/connect operations.
+    """
+
+    nodes: list[NodeSpec] = Field(default_factory=list, description="Nodes to create")
+    connections: list[ConnectionSpec] = Field(default_factory=list, description="Connections to make")
+
+
+# ---------------------------------------------------------------------------
+# System prompt: teaches the LLM the graph spec format + available node types
+# ---------------------------------------------------------------------------
+
+
 _SYSTEM_PROMPT = """\
-你是一个节点图编辑器的 copilot。用户用自然语言描述意图,你调用工具操作节点图。
+你是一个节点图编辑器的 copilot。用户用自然语言描述意图,你调用 build_graph 工具生成整个图的结构。
 
-可用节点类型(注册在 math.nodes 命名空间):
-- NumberNode:输出一个数字。component_id 格式 "NumberNode:<value>"(如 "NumberNode:42")。
-- StringNode:输出一个字符串。component_id 格式 "StringNode:<text>"(如 "StringNode:hello")。
-- AddNode:加法,两个输入 a/b,输出 result。
-- SubtractNode:减法,两个输入 a/b,输出 result。
-- MultiplyNode:乘法,两个输入 a/b,输出 result。
-- OutputNode:显示输入值(debug sink)。
+可用节点类型(math.nodes 命名空间):
+- NumberNode:输出数字。properties: {"value": <number>}(如 {"value": 50})。
+- StringNode:输出字符串。properties: {"value": <text>}(如 {"value": "hello"})。
+- AddNode:加法,输入端口 a(0)/b(1),输出 result(0)。
+- SubtractNode:减法,输入端口 a(0)/b(1),输出 result(0)。
+- MultiplyNode:乘法,输入端口 a(0)/b(1),输出 result(0)。
+- OutputNode:显示输入值,输入端口 value(0),无输出。
 
-操作工具:
-- add_component_to_dashboard(component_id):创建节点。component_id 用上面的格式。
-- update_component_in_dashboard(component_id, changes):修改节点。changes={"value": <新值>}。
-- connect_nodes(source_node, target_node, source_port=0, target_port=0):连接两个节点。
-  source_node/target_node 是节点名(如 "num1");端口 index 从 0 开始。
+调用 build_graph(nodes=[...], connections=[...]) 一次生成整个图。
+connections 里 source_port/target_port 是端口 index(从 0 开始)。
 
-用中文回复。先调用工具执行操作,再简短解释你做了什么。
+示例:用户说"加一个值为 50 的数字节点,连到加法节点再连到输出节点":
+build_graph(
+  nodes=[
+    {"type": "NumberNode", "name": "num50", "properties": {"value": 50}},
+    {"type": "AddNode", "name": "add1"},
+    {"type": "OutputNode", "name": "out1"}
+  ],
+  connections=[
+    {"source": "num50", "source_port": 0, "target": "add1", "target_port": 0},
+    {"source": "add1", "source_port": 0, "target": "out1", "target_port": 0}
+  ]
+)
+
+用中文回复。调用 build_graph 后简短解释你创建了什么。
 """
 
 
+# ---------------------------------------------------------------------------
+# MainWindow
+# ---------------------------------------------------------------------------
+
+
 class MainWindow(QMainWindow):
-    """Main window: NodeGraphQt graph (central) + ChatPanel (right-docked)."""
+    """Main window: NodeGraphQt graph (central) + ChatPanel (right-docked).
+
+    The graph operations are backend-sync tools (no interrupt/resume). The LLM
+    generates a GraphSpec (serialized node graph), the backend deserializes it
+    into NodeGraphQt nodes + pipes in one tool call.
+    """
 
     def __init__(self) -> None:
-        """Build the UI + wire the orchestrator + adapter."""
+        """Build the UI + wire the orchestrator + adapter + build_graph tool."""
         super().__init__()
         self.setWindowTitle("agentkit · NodeGraphQt 自然语言节点编辑器")
         self.resize(1200, 800)
@@ -79,11 +140,12 @@ class MainWindow(QMainWindow):
         self._graph.register_nodes(MATH_NODES)
         self.setCentralWidget(self._graph.widget)
 
-        # --- AgentKit orchestrator ---
+        # --- AgentKit orchestrator + build_graph tool ---
         self._adapter = NodeGraphQtAdapter(self._graph)
         self._orch = LanggraphOrchestrator(
             make_openrouter_llm(),
             self._adapter,
+            extra_tools=[self._make_build_graph_tool()],
             system_prompt=_SYSTEM_PROMPT,
         )
 
@@ -94,88 +156,76 @@ class MainWindow(QMainWindow):
         # Focus the chat input so the user can start typing immediately.
         self._chat.input.setFocus()
 
-    def _execute_fc(self, fc: CopilotFunctionCall) -> str:
-        """Execute a frontend UI action on the node graph.
+    def _make_build_graph_tool(self) -> Any:
+        """Create the build_graph @tool, bound to this window's NodeGraph.
 
-        Called by ``ChatPanel`` when the orchestrator yields a
-        ``CopilotFunctionCall`` (from ``interrupt()``). Returns a result string
-        that becomes the ``resume`` payload.
-
-        Args:
-            fc: The function call from the LLM (name + arguments + tool_call_id).
-
-        Returns:
-            A result string ("created" / "updated" / "connected" / "error: ...").
+        The LLM calls this with a GraphSpec (nodes + connections). The backend
+        deserializes it into NodeGraphQt nodes + pipes. This is a backend-sync
+        tool — no interrupt/resume, the agent↔tools loop runs multi-step within
+        one request.
         """
-        try:
-            if fc.name == "add_component_to_dashboard":
-                return self._add_node(fc.arguments)
-            if fc.name == "update_component_in_dashboard":
-                return self._update_node(fc.arguments)
-            if fc.name == "connect_nodes":
-                return self._connect_nodes(fc.arguments)
-            return f"error: unknown verb {fc.name}"
-        except Exception as e:
-            return f"error: {e}"
+        graph = self._graph
 
-    def _add_node(self, args: dict[str, Any]) -> str:
-        """Create a node from component_id format "NodeType:value"."""
-        component_id = args.get("component_id", "")
-        if ":" in component_id:
-            node_type, value_str = component_id.split(":", 1)
-        else:
-            node_type, value_str = component_id, None
+        @tool
+        def build_graph(
+            nodes: list[NodeSpec] | None = None,
+            connections: list[ConnectionSpec] | None = None,
+        ) -> str:
+            """Build a node graph from a serialized spec: create nodes + connect ports.
 
-        # Map short name to full identifier.
-        full_id = f"math.nodes.{node_type}" if not node_type.startswith("math.nodes.") else node_type
-        # Generate a unique node name.
-        base_name = node_type
-        existing = {n.name() for n in self._graph.all_nodes()}
-        name = base_name
-        i = 1
-        while name in existing:
-            name = f"{base_name}{i}"
-            i += 1
+            Call this once with the full graph structure. Each node has a type
+            (NumberNode, AddNode, ...), a unique name, and optional properties
+            (e.g. {"value": 50}). Each connection links a source node's output
+            port to a target node's input port by name + port index.
+            """
+            nodes = nodes or []
+            connections = connections or []
+            created: list[str] = []
+            errors: list[str] = []
 
-        node = self._graph.create_node(full_id, name=name)
+            # Phase 1: create all nodes.
+            existing = {n.name() for n in graph.all_nodes()}
+            name_to_node: dict[str, Any] = {}
+            for spec in nodes:
+                if spec.name in existing:
+                    errors.append(f"node '{spec.name}' already exists")
+                    continue
+                full_id = f"math.nodes.{spec.type}" if not spec.type.startswith("math.") else spec.type
+                try:
+                    node = graph.create_node(full_id, name=spec.name)
+                    for key, value in spec.properties.items():
+                        node.set_property(key, value)
+                    name_to_node[spec.name] = node
+                    created.append(spec.name)
+                except Exception as e:
+                    errors.append(f"failed to create '{spec.name}': {e}")
 
-        # Set the initial value if the node has a widget (NumberNode/StringNode).
-        if value_str is not None and hasattr(node, "set_property"):
-            # Try to coerce to float for NumberNode; else keep as string.
-            try:
-                value: float | str = float(value_str)
-            except ValueError:
-                value = value_str
-            node.set_property("value", value)
-        return "created"
+            # Phase 2: connect ports (after all nodes exist).
+            connected: list[str] = []
+            for conn in connections:
+                src = name_to_node.get(conn.source) or self._find_node(conn.source)
+                tgt = name_to_node.get(conn.target) or self._find_node(conn.target)
+                if src is None:
+                    errors.append(f"connect: source '{conn.source}' not found")
+                    continue
+                if tgt is None:
+                    errors.append(f"connect: target '{conn.target}' not found")
+                    continue
+                try:
+                    src.output(conn.source_port).connect_to(tgt.input(conn.target_port))
+                    connected.append(f"{conn.source}[{conn.source_port}]->{conn.target}[{conn.target_port}]")
+                except Exception as e:
+                    errors.append(f"connect {conn.source}->{conn.target}: {e}")
 
-    def _update_node(self, args: dict[str, Any]) -> str:
-        """Modify a node's property (e.g. change its value)."""
-        component_id = args.get("component_id", "")
-        changes: dict = args.get("changes", {})
-        node = self._find_node(component_id)
-        if node is None:
-            return f"error: node not found: {component_id}"
-        for key, value in changes.items():
-            node.set_property(key, value)
-        return "updated"
+            # Auto-layout so the graph looks reasonable.
+            graph.auto_layout_nodes()
 
-    def _connect_nodes(self, args: dict[str, Any]) -> str:
-        """Connect source_node.output(port) → target_node.input(port)."""
-        source_name = args["source_node"]
-        target_name = args["target_node"]
-        source_port = int(args.get("source_port", 0))
-        target_port = int(args.get("target_port", 0))
+            summary = f"created {len(created)} nodes, {len(connected)} connections"
+            if errors:
+                summary += f", errors: {'; '.join(errors)}"
+            return summary
 
-        source = self._find_node(source_name)
-        target = self._find_node(target_name)
-        if source is None:
-            return f"error: source node not found: {source_name}"
-        if target is None:
-            return f"error: target node not found: {target_name}"
-
-        source.output(source_port).connect_to(target.input(target_port))
-        return "connected"
+        return build_graph
 
     def _find_node(self, name: str) -> Any | None:
         """Find a node by display name."""

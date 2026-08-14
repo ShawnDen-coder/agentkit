@@ -1,9 +1,9 @@
-"""Chat panel: docked QDockWidget that drives the orchestrator + handles HITL.
+"""Chat panel: docked QDockWidget that drives the orchestrator.
 
 Consumes ``BaseSSE`` events in-process (no SSE serialization — this is the DCC
-in-process deployment model). On ``CopilotFunctionCall`` (from ``interrupt()``),
-calls ``MainWindow._execute_fc(fc)`` to mutate the node graph, then resumes with
-``thread_id + resume`` (0.3.0 stateful mode).
+in-process deployment model). Node graph operations are backend-sync tools
+(``build_graph``), so there's no ``CopilotFunctionCall`` interrupt/resume
+round-trip — the agent↔tools loop runs multi-step within one request.
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ from PySide6.QtWidgets import QTextEdit
 from PySide6.QtWidgets import QVBoxLayout
 from PySide6.QtWidgets import QWidget
 
-from agentkit_protocol import CopilotFunctionCall
 from agentkit_protocol import CopilotMessageArtifact
 from agentkit_protocol import CopilotMessageChunk
 from agentkit_protocol import CopilotPromptSuggestions
@@ -39,15 +38,16 @@ __all__ = ["ChatPanel"]
 
 
 class ChatPanel(QDockWidget):
-    """Right-docked chat panel: drives the orchestrator + handles HITL round-trips.
+    """Right-docked chat panel: drives the orchestrator and streams SSE events.
 
-    Holds a ``LanggraphOrchestrator`` + per-conversation ``thread_id``. Each new
-    human turn generates a new thread_id; interrupt/resume within the same turn
-    reuses it (0.3.0 stateful mode).
+    Node graph operations (``build_graph``) are backend-sync tools, so the
+    chat panel just streams the response — no interrupt/resume round-trip.
+    A ``thread_id`` is still generated per conversation (stateful mode for
+    conversation history via the checkpointer).
     """
 
     def __init__(self, orchestrator: LanggraphOrchestrator, main_window: QMainWindow) -> None:
-        """Build the UI and store the orchestrator + main window (for _execute_fc)."""
+        """Build the UI and store the orchestrator + main window."""
         super().__init__("Copilot")
         self._orch = orchestrator
         self._main = main_window
@@ -67,7 +67,7 @@ class ChatPanel(QDockWidget):
         layout.addWidget(self.chat, 3)
 
         self.input = QLineEdit()
-        self.input.setPlaceholderText("提问:加一个值为 42 的数字节点")
+        self.input.setPlaceholderText("提问:创建一套值为 50 的节点图")
         self.input.returnPressed.connect(self._on_send)
         layout.addWidget(self.input)
 
@@ -87,7 +87,7 @@ class ChatPanel(QDockWidget):
         self._messages.append(Message(role="human", content=text))
         self._append("human", text)
         self._thread_id = f"thread-{uuid.uuid4()}"
-        self._spawn(self._run(resume=None))
+        self._spawn(self._run())
 
     def _spawn(self, coro: asyncio.coroutines) -> None:
         """Schedule coro on the asyncio loop; keep a ref so it isn't GC'd."""
@@ -95,26 +95,23 @@ class ChatPanel(QDockWidget):
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _run(self, resume: dict | None = None) -> None:
+    async def _run(self) -> None:
         """Drive the orchestrator and dispatch BaseSSE events.
 
-        First call (resume=None): send messages + thread_id. On
-        CopilotFunctionCall: execute the UI action via MainWindow._execute_fc,
-        then re-call _run(resume={result, tool_call_id}) with the SAME thread_id.
+        Node graph operations are backend-sync (build_graph @tool), so the
+        agent↔tools loop runs multi-step within this one request. No
+        interrupt/resume round-trip needed.
         """
         ctx = SessionContext(
             user_identity="node-editor-user",
             workspace_id="ws-local",
             trace_id=f"trace-{uuid.uuid4()}",
         )
-        if resume is not None:
-            req = QueryRequest(messages=[], session_context=ctx, thread_id=self._thread_id, resume=resume)
-        else:
-            req = QueryRequest(
-                messages=self._messages,
-                session_context=ctx,
-                thread_id=self._thread_id,
-            )
+        req = QueryRequest(
+            messages=self._messages,
+            session_context=ctx,
+            thread_id=self._thread_id,
+        )
 
         self._assistant_buf = ""
         try:
@@ -130,17 +127,6 @@ class ChatPanel(QDockWidget):
                 self._end_stream()
                 if isinstance(event, CopilotMessageArtifact):
                     self._append("assistant", f"<i>[artifact: {type(event.artifact).__name__}]</i>")
-                elif isinstance(event, CopilotFunctionCall):
-                    self._append(
-                        "assistant",
-                        f"<i>-> 执行:{event.name}({event.arguments})</i>",
-                    )
-                    self._assistant_buf = ""
-                    result = self._main._execute_fc(event)
-                    self._spawn(
-                        self._run(resume={"result": result, "tool_call_id": event.tool_call_id})
-                    )
-                    return
                 elif isinstance(event, CopilotPromptSuggestions):
                     suggestions = " · ".join(event.suggestions)
                     self._append("assistant", f"<i>建议:{suggestions}</i>")
