@@ -4,8 +4,21 @@
 > surface and the versioning policy. Changes to anything listed here require a version
 > bump (see [Versioning](#versioning)) and an update to this file + `agentkit-architecture.md`.
 
-`PROTOCOL_VERSION = "0.2.0"` (defined in `agentkit_protocol`).
+`PROTOCOL_VERSION = "0.3.0"` (defined in `agentkit_protocol`).
 
+> **0.3.0 changes** (additive, backward-compatible — see architecture appendix E):
+> - `QueryRequest.thread_id: str | None` + `QueryRequest.resume: dict | None` —
+>   support stateful mode (checkpointer + thread_id). Stateful requests carry
+>   `thread_id` (no full message resend); resume from a `CopilotFunctionCall` by
+>   sending `thread_id` + `resume`. Stateless mode unchanged (send full `messages`).
+> - `Message.tool_call_id: str | None` — tightens the `role=tool` round-trip so
+>   the orchestrator can faithfully reconstruct langchain `ToolMessage` objects
+>   without synthesizing fake call ids.
+> - `CopilotFunctionCall.tool_call_id: str | None` — lets the frontend correlate
+>   the FunctionCall round-trip when resuming.
+> - `QueryRequest.messages` now defaults to `[]` (was required) so stateful
+>   requests that only send `thread_id` don't need an empty messages list.
+>
 > **0.2.0 (M2) changes** (additive, backward-compatible):
 > - `SessionContext.auth_token: SecretStr | None` (`exclude=True`) - delegated credential for
 >   Option B backend-fetch. Transported via HTTP `Authorization` header (FastAPI layer

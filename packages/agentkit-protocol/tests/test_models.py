@@ -176,6 +176,8 @@ def test_query_request_defaults() -> None:
     assert req.protocol_version == PROTOCOL_VERSION
     assert req.tools is None
     assert req.features is None
+    assert req.thread_id is None  # 0.3.0
+    assert req.resume is None  # 0.3.0
 
 
 def test_message_roles() -> None:
@@ -183,6 +185,45 @@ def test_message_roles() -> None:
     for role in ("human", "tool", "assistant", "system"):
         m = Message(role=role)
         assert m.role == role
+
+
+def test_message_tool_call_id_030() -> None:
+    """0.3.0: Message.tool_call_id round-trips (tightens role=tool)."""
+    m = Message(role="tool", name="add_component_to_dashboard", data={"ok": True}, tool_call_id="c1")
+    j = m.model_dump_json()
+    reparsed = Message.model_validate_json(j)
+    assert reparsed.tool_call_id == "c1"
+
+
+def test_query_request_stateful_fields_030() -> None:
+    """0.3.0: QueryRequest.thread_id + resume round-trip."""
+    req = QueryRequest(
+        messages=[],
+        session_context=SessionContext(user_identity="u1", workspace_id="ws1", trace_id="t1"),
+        thread_id="thread-abc",
+        resume={"result": "added", "tool_call_id": "c1"},
+    )
+    j = req.model_dump_json()
+    reparsed = QueryRequest.model_validate_json(j)
+    assert reparsed.thread_id == "thread-abc"
+    assert reparsed.resume == {"result": "added", "tool_call_id": "c1"}
+
+
+def test_query_request_messages_default_empty_030() -> None:
+    """0.3.0: messages defaults to [] (stateful mode may send only thread_id)."""
+    req = QueryRequest(
+        session_context=SessionContext(user_identity="u1", workspace_id="ws1", trace_id="t1"),
+        thread_id="thread-abc",
+    )
+    assert req.messages == []
+
+
+def test_copilot_function_call_tool_call_id_030() -> None:
+    """0.3.0: CopilotFunctionCall.tool_call_id round-trips."""
+    fc = CopilotFunctionCall(name="add_component_to_dashboard", arguments={"component_id": "x"}, tool_call_id="c1")
+    j = fc.model_dump_json()
+    reparsed = CopilotFunctionCall.model_validate_json(j)
+    assert reparsed.tool_call_id == "c1"
 
 
 def test_query_request_roundtrip() -> None:

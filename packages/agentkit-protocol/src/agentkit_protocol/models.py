@@ -55,7 +55,7 @@ __all__ = [
     "TextArtifact",
 ]
 
-PROTOCOL_VERSION = "0.2.0"
+PROTOCOL_VERSION = "0.3.0"
 
 
 # ---------------------------------------------------------------------------
@@ -277,11 +277,15 @@ class CopilotFunctionCall(BaseSSE):
     Carries the verb name + arguments; the frontend executes, then re-POSTs with a
     ``role=tool`` message containing the result. Reserved for UI actions only
     (add/update/manage_nav/assign_tasks); data/skill/MCP go via backend sync calls.
+
+    0.3.0: ``tool_call_id`` lets the frontend correlate the round-trip when
+    resuming a stateful thread (additive optional, backward-compatible).
     """
 
     event: ClassVar[str] = "copilotFunctionCall"
     name: str
     arguments: dict[str, Any] = PydanticField(default_factory=dict)
+    tool_call_id: str | None = None  # 0.3.0: correlate the FunctionCall round-trip
 
 
 class CopilotCitationCollection(BaseSSE):
@@ -331,6 +335,10 @@ class Message(BaseModel):
     - role=human: run the agent (sync multi-hop fetch + stream).
     - role=tool: a frontend UI action result returned via the FunctionCall loop.
     - role=assistant/system: history context.
+
+    0.3.0: ``tool_call_id`` tightens the role=tool round-trip (additive optional)
+    so the orchestrator can faithfully reconstruct langchain ToolMessage objects
+    without synthesizing fake call ids.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -339,16 +347,29 @@ class Message(BaseModel):
     content: str | None = None
     name: str | None = None  # role=tool: the verb name whose result this carries
     data: dict[str, Any] | None = None  # role=tool: structured result payload
+    tool_call_id: str | None = None  # 0.3.0: correlate role=tool with CopilotFunctionCall
 
 
 class QueryRequest(BaseModel):
-    """Inbound request. Stateless: all state lives in ``messages``."""
+    """Inbound request.
+
+    0.3.0 supports both stateful (checkpointer + thread_id) and stateless
+    (all state in messages) modes:
+    - Stateful: send ``thread_id`` (no need to resend full message history). On
+      resume from a FunctionCall, send ``thread_id`` + ``resume`` (the result).
+    - Stateless: send full ``messages`` as before (``thread_id`` optional;
+      if omitted, a per-request saver is used and discarded).
+
+    Both modes are additive optional fields; 0.2.0 consumers ignore them.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    messages: list[Message]
+    messages: list[Message] = PydanticField(default_factory=list)
     session_context: SessionContext
     protocol_version: str = PROTOCOL_VERSION
+    thread_id: str | None = None  # 0.3.0: stateful mode (resume an existing thread)
+    resume: dict[str, Any] | None = None  # 0.3.0: stateful mode (result from a prior CopilotFunctionCall)
     tools: list[dict[str, Any]] | None = None  # per-agent MCP function defs (§8.2 mode A)
     features: dict[str, bool] | None = None  # boolean feature gates (frontend injection)
     workspace_options: dict[str, Any] | None = None  # object-form user toggles (§4.1)
