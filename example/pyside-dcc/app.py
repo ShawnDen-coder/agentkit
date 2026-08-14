@@ -161,8 +161,15 @@ class MainWindow(QMainWindow):
                     # Discard the prelude (buf) - the orchestrator synthesizes the
                     # assistant tool_call on resume (Message has no tool_calls field).
                     self._assistant_buf = ""
+                    # 0.3.0: tool_call_id tightens the round-trip (lets the orchestrator
+                    # faithfully reconstruct the ToolMessage without fake call ids).
                     self._messages.append(
-                        Message(role="tool", name=event.name, data={"added": True, **event.arguments})
+                        Message(
+                            role="tool",
+                            name=event.name,
+                            data={"added": True, **event.arguments},
+                            tool_call_id=event.tool_call_id,
+                        )
                     )
                     self._spawn(self._run())  # resume the round-trip
                     return

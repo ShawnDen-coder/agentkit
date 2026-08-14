@@ -36,7 +36,6 @@ from openrouter import make_openrouter_llm
 from agentkit_protocol import AllowAllAuthorizer
 from agentkit_protocol import AuthContext
 from agentkit_protocol import AuthenticationError
-from agentkit_protocol import AuthzAction
 from agentkit_protocol import Message
 from agentkit_protocol import Principal
 from agentkit_protocol import QueryRequest
@@ -93,9 +92,14 @@ llm = make_openrouter_llm()  # env: OPENROUTER_API_KEY; default model anthropic/
 # system_prompt is baked into the create_agent graph at construction (idiomatic langchain):
 # it becomes a SystemMessage prepended to every model call. The verb tools are already
 # described to the LLM via bind_tools; this is the role/behavior guidance.
+authenticator: Authenticator = ExampleAuthenticator()
+authorizer = AllowAllAuthorizer()  # real impl: per-verb RLS (deny by verb/component/args)
+# 0.3.0: authorizer is passed to the orchestrator; per-verb RLS runs inside each
+# backend-verb tool (was a no-op in M2). No need for a boundary verb="query" call.
 orchestrator = LanggraphOrchestrator(
     llm,
     adapter,
+    authorizer=authorizer,
     system_prompt=(
         "You are a BI dashboard copilot. Answer the user's question by calling the "
         "available tools to fetch catalog/data from the BI backend, then explain the "
@@ -103,8 +107,6 @@ orchestrator = LanggraphOrchestrator(
         "call add_component_to_dashboard. Reply in Chinese."
     ),
 )
-authenticator: Authenticator = ExampleAuthenticator()
-authorizer = AllowAllAuthorizer()  # real impl: per-verb RLS
 
 app = FastAPI(title="agentkit FastAPI BI example")
 _STATIC = Path(__file__).resolve().parent / "static"
@@ -118,22 +120,33 @@ async def index() -> FileResponse:
 
 @app.post("/v1/query")
 async def query(request: Request) -> StreamingResponse:
-    """SSE endpoint: auth -> SessionContext -> orchestrator.run -> SSE stream."""
+    """SSE endpoint: auth -> SessionContext -> orchestrator.run -> SSE stream.
+
+    0.3.0: supports both stateful (thread_id + resume) and stateless (full messages)
+    modes. The frontend sends thread_id on resume from a CopilotFunctionCall; the
+    orchestrator's checkpointer holds the conversation state.
+    """
     # 1. Auth runs before the SSE/orchestrator path (not part of either waist).
     ctx = await _auth_context(request)
     principal = await authenticator.authenticate(ctx)
-    await authorizer.authorize(principal, AuthzAction(verb="query"))
+    # Per-verb RLS now runs inside each tool (authorizer passed to orchestrator).
+    # No boundary verb="query" call needed — that was a placeholder in M2.
 
     # 2. Build the wire QueryRequest. The frontend sends {messages}; the backend is
     #    authoritative for session_context - identity / permissions / trace_id come
     #    from the verified Principal, and auth_token rides the Authorization header
     #    (never the body). So we do NOT validate the body as a QueryRequest (its
     #    session_context would be incomplete); we wrap messages with the auth-derived
-    #    session.
+    #    session. 0.3.0: thread_id + resume pass through from the body if present.
     body = await request.json()
     messages = [Message.model_validate(m) for m in body.get("messages", [])]
     session = session_from_principal(principal, trace_id=str(uuid.uuid4()))
-    req = QueryRequest(messages=messages, session_context=session)
+    req = QueryRequest(
+        messages=messages,
+        session_context=session,
+        thread_id=body.get("thread_id"),
+        resume=body.get("resume"),
+    )
 
     # 3. Drive the orchestrator; serialize each BaseSSE event to an SSE frame.
     async def stream() -> AsyncIterator[str]:
