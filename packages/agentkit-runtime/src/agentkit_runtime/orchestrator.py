@@ -50,6 +50,7 @@ from agentkit_protocol import CopilotMessageArtifact
 from agentkit_protocol import CopilotMessageChunk
 from agentkit_protocol import CopilotPromptSuggestions
 from agentkit_protocol import CopilotStatusUpdate
+from agentkit_protocol import Principal
 from agentkit_protocol import QueryRequest
 from agentkit_runtime.adapter_tools import ToArtifact
 from agentkit_runtime.adapter_tools import build_adapter_tools
@@ -110,13 +111,20 @@ class LanggraphOrchestrator:
         checkpointer: Any = None,
         extra_tools: list[BaseTool] | None = None,
         to_artifact: ToArtifact | None = None,
+        authorizer: Any = None,
+        principal_resolver: Any = None,
         max_hops: int = 5,
         system_prompt: str | None = None,
     ) -> None:
-        """Compile the ``create_agent`` graph once (reused across requests)."""
+        """Compile the ``create_agent`` graph once (reused across requests).
+
+        See class docstring for parameter descriptions.
+        """
         self._max_hops = max_hops
+        self._authorizer = authorizer
+        self._principal_resolver = principal_resolver
         tools = [
-            *build_adapter_tools(adapter, to_artifact=to_artifact),
+            *build_adapter_tools(adapter, to_artifact=to_artifact, authorizer=authorizer),
             *build_frontend_tools(),
             *(extra_tools or []),
         ]
@@ -142,10 +150,25 @@ class LanggraphOrchestrator:
         yield CopilotStatusUpdate(status="thinking", label="思考中")
 
         thread_id = request.thread_id or f"req-{id(request)}"
+        # Resolve the Principal for per-verb authz (if an authorizer is configured).
+        if self._authorizer is not None:
+            if self._principal_resolver is not None:
+                principal = self._principal_resolver(request)
+            else:
+                principal = Principal(
+                    user_identity=request.session_context.user_identity,
+                    user_permissions=tuple(request.session_context.user_permissions),
+                    auth_token=request.session_context.auth_token,
+                    workspace_id=request.session_context.workspace_id,
+                )
+        else:
+            principal = None
         config: dict[str, Any] = {
             "configurable": {"thread_id": thread_id, "ctx": request.session_context},
             "recursion_limit": self._max_hops * 2 + 2,
         }
+        if principal is not None:
+            config["configurable"]["principal"] = principal
 
         if request.resume is not None:
             # Resume from a prior CopilotFunctionCall interrupt.

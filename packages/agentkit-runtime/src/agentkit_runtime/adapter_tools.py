@@ -34,7 +34,10 @@ from pydantic import BaseModel
 from pydantic import Field
 
 from agentkit_protocol import Artifact
+from agentkit_protocol import Authorizer
+from agentkit_protocol import AuthzAction
 from agentkit_protocol import ComponentAdapter
+from agentkit_protocol import Principal
 from agentkit_protocol import Refinement
 from agentkit_protocol import SessionContext
 
@@ -124,16 +127,42 @@ async def _emit_status(verb: str, config: RunnableConfig) -> None:
     await adispatch_custom_event("status", {"status": "running", "label": label}, config=config)
 
 
+async def _authorize(
+    authorizer: Authorizer | None,
+    config: RunnableConfig,
+    verb: str,
+    component_id: str | None = None,
+    args: dict[str, Any] | None = None,
+) -> None:
+    """Per-verb RLS check. If authorizer is None, skip (dev/test mode).
+
+    Reads the Principal from config["configurable"]["principal"] (set by the
+    orchestrator from the authenticated request). Raises AuthorizationError on
+    denial (the orchestrator's ToolErrorMiddleware converts it to a ToolMessage
+    for LLM recovery, or the app layer maps it to HTTP 403).
+    """
+    if authorizer is None:
+        return
+    principal: Principal = config["configurable"]["principal"]
+    await authorizer.authorize(
+        principal,
+        AuthzAction(verb=verb, component_id=component_id, args=args or {}),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tool builders (one per backend verb)
 # ---------------------------------------------------------------------------
 
 
-def _build_get_catalog(adapter: ComponentAdapter, to_artifact: ToArtifact | None) -> BaseTool:
+def _build_get_catalog(
+    adapter: ComponentAdapter, to_artifact: ToArtifact | None, authorizer: Authorizer | None
+) -> BaseTool:
     """Build the get_catalog tool (lists available components)."""
 
     async def _run(config: RunnableConfig) -> str:
         ctx: SessionContext = config["configurable"]["ctx"]
+        await _authorize(authorizer, config, verb="get_catalog")
         await _emit_status("get_catalog", config)
         components = await adapter.list_components(ctx)
         result: dict[str, Any] = {"components": [c.model_dump(by_alias=True) for c in components]}
@@ -149,11 +178,14 @@ def _build_get_catalog(adapter: ComponentAdapter, to_artifact: ToArtifact | None
     )
 
 
-def _build_get_component_data(adapter: ComponentAdapter, to_artifact: ToArtifact | None) -> BaseTool:
+def _build_get_component_data(
+    adapter: ComponentAdapter, to_artifact: ToArtifact | None, authorizer: Authorizer | None
+) -> BaseTool:
     """Build the get_component_data tool (fetches data for a component)."""
 
     async def _run(config: RunnableConfig, component_id: str, input_args: dict[str, Any] | None = None) -> str:
         ctx: SessionContext = config["configurable"]["ctx"]
+        await _authorize(authorizer, config, verb="get_component_data", component_id=component_id, args=input_args)
         await _emit_status("get_component_data", config)
         component = await adapter.get_component(ctx, component_id)
         data = await adapter.get_component_data(ctx, component, input_args or {})
@@ -170,11 +202,14 @@ def _build_get_component_data(adapter: ComponentAdapter, to_artifact: ToArtifact
     )
 
 
-def _build_get_selection(adapter: ComponentAdapter, to_artifact: ToArtifact | None) -> BaseTool:
+def _build_get_selection(
+    adapter: ComponentAdapter, to_artifact: ToArtifact | None, authorizer: Authorizer | None
+) -> BaseTool:
     """Build the get_selection tool (returns user's current selection)."""
 
     async def _run(config: RunnableConfig) -> str:
         ctx: SessionContext = config["configurable"]["ctx"]
+        await _authorize(authorizer, config, verb="get_selection")
         await _emit_status("get_selection", config)
         data = await adapter.get_selection(ctx)
         result = data.model_dump()
@@ -190,11 +225,14 @@ def _build_get_selection(adapter: ComponentAdapter, to_artifact: ToArtifact | No
     )
 
 
-def _build_get_semantic_model(adapter: ComponentAdapter, to_artifact: ToArtifact | None) -> BaseTool:
+def _build_get_semantic_model(
+    adapter: ComponentAdapter, to_artifact: ToArtifact | None, authorizer: Authorizer | None
+) -> BaseTool:
     """Build the get_semantic_model tool (fetches a component's schema)."""
 
     async def _run(config: RunnableConfig, component_id: str) -> str:
         ctx: SessionContext = config["configurable"]["ctx"]
+        await _authorize(authorizer, config, verb="get_semantic_model", component_id=component_id)
         await _emit_status("get_semantic_model", config)
         component = await adapter.get_component(ctx, component_id)
         schema = await adapter.get_semantic_model(ctx, component)
@@ -211,11 +249,14 @@ def _build_get_semantic_model(adapter: ComponentAdapter, to_artifact: ToArtifact
     )
 
 
-def _build_refine_component(adapter: ComponentAdapter, to_artifact: ToArtifact | None) -> BaseTool:
+def _build_refine_component(
+    adapter: ComponentAdapter, to_artifact: ToArtifact | None, authorizer: Authorizer | None
+) -> BaseTool:
     """Build the refine_component tool (filters/drills/swaps measure on fetched data)."""
 
     async def _run(config: RunnableConfig, component_id: str, refinement: dict[str, Any]) -> str:
         ctx: SessionContext = config["configurable"]["ctx"]
+        await _authorize(authorizer, config, verb="refine_component", component_id=component_id, args=refinement)
         await _emit_status("refine_component", config)
         component = await adapter.get_component(ctx, component_id)
         # Refinement is a polymorphic envelope (kind + extra="allow"); rebuild from dict.
@@ -244,12 +285,14 @@ def build_adapter_tools(
     adapter: ComponentAdapter,
     *,
     to_artifact: ToArtifact | None = None,
+    authorizer: Authorizer | None = None,
 ) -> list[BaseTool]:
     """Build langchain tools for the 5 implemented backend verbs.
 
-    Each tool emits a ``status`` side-channel event, calls the matching
-    ``ComponentAdapter`` method, optionally emits an ``artifact`` event via the
-    profile-injected ``to_artifact`` hook, and returns the result as JSON.
+    Each tool: (1) checks per-verb authorization if an ``authorizer`` is provided,
+    (2) emits a ``status`` side-channel event, (3) calls the matching
+    ``ComponentAdapter`` method, (4) optionally emits an ``artifact`` event via the
+    profile-injected ``to_artifact`` hook, and (5) returns the result as JSON.
 
     The 2 stub verbs (``get_skill_content``, ``execute_tool``) are NOT included
     here - they raise ``NotImplementedError`` until M4 (skills) / M6 (MCP) land.
@@ -261,14 +304,19 @@ def build_adapter_tools(
             that converts a ``ComponentData`` dump into an ``Artifact``. If
             None, no artifact events are emitted. Runtime does NOT sniff data
             shape - the profile declares the mapping.
+        authorizer: Optional ``Authorizer`` for per-verb RLS. If provided, each
+            tool calls ``authorizer.authorize(principal, AuthzAction(verb, ...))``
+            before the adapter method. The ``Principal`` is read from
+            ``config["configurable"]["principal"]`` (set by the orchestrator from
+            the authenticated request). If None, authorization is skipped (dev/test).
 
     Returns:
         5 langchain ``BaseTool`` objects (one per implemented backend verb).
     """
     return [
-        _build_get_catalog(adapter, to_artifact),
-        _build_get_component_data(adapter, to_artifact),
-        _build_get_selection(adapter, to_artifact),
-        _build_get_semantic_model(adapter, to_artifact),
-        _build_refine_component(adapter, to_artifact),
+        _build_get_catalog(adapter, to_artifact, authorizer),
+        _build_get_component_data(adapter, to_artifact, authorizer),
+        _build_get_selection(adapter, to_artifact, authorizer),
+        _build_get_semantic_model(adapter, to_artifact, authorizer),
+        _build_refine_component(adapter, to_artifact, authorizer),
     ]
