@@ -1,44 +1,32 @@
-"""LLM factory for the examples (provider config lives here, not in runtime).
+"""OpenRouter LLM factory: build a langchain ``BaseChatModel`` from env.
 
-Uses langchain's ``init_chat_model`` so the provider is chosen by the model-string
-prefix (``openai:...``, ``anthropic:...``, ...). For OpenRouter we use the ``openai:``
-prefix (OpenRouter is OpenAI-compatible) plus the OpenRouter ``base_url``.
-
-``agentkit-runtime`` is provider-neutral (only depends on ``langgraph`` +
-``langchain-core``, takes a ``BaseChatModel``). Provider choice is the caller's concern
-- this factory builds the model, reading the key from env. ``langchain`` +
-``langchain-openai`` are in the workspace dev group, so no ``--with`` is needed.
-
-Two tokens, do not confuse:
-  * ``OPENROUTER_API_KEY`` (env) - LLM provider key, backend-configured.
-  * ``SessionContext.auth_token`` - the user's delegated BI-fetch credential, rides the
-    HTTP ``Authorization`` header, never the body (§10).
+Reads ``OPENROUTER_API_KEY`` (required) and ``OPENROUTER_MODEL`` (optional,
+defaults to ``anthropic/claude-3.5-sonnet``). Returns a ``ChatOpenAI`` pointed at
+the OpenRouter OpenAI-compatible endpoint — langchain's own provider abstraction,
+no wrapper layer.
 """
 
 from __future__ import annotations
 
 import os
 
-from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
+from langchain_openai import ChatOpenAI
 
 
 __all__ = ["make_openrouter_llm"]
 
 
-def make_openrouter_llm(model: str | None = None, *, streaming: bool = True) -> BaseChatModel:
-    """Build a chat model via ``init_chat_model``, pointed at OpenRouter.
+def make_openrouter_llm() -> BaseChatModel:
+    """Construct a langchain ``ChatOpenAI`` backed by OpenRouter.
 
-    OpenRouter is OpenAI-compatible, so we use the ``openai:`` prefix + the OpenRouter
-    ``base_url``. The model slug is OpenRouter's (e.g. ``anthropic/claude-sonnet-4``).
+    Raises:
+        KeyError: if ``OPENROUTER_API_KEY`` is not set.
     """
-    key = os.environ.get("OPENROUTER_API_KEY")
-    if not key:
-        raise RuntimeError("OPENROUTER_API_KEY env var not set")
-    slug = model or os.environ.get("OPENROUTER_MODEL", "anthropic/claude-sonnet-4")
-    return init_chat_model(
-        f"openai:{slug}",
+    api_key = os.environ["OPENROUTER_API_KEY"]
+    model = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
+    return ChatOpenAI(
+        model=model,
+        api_key=api_key,
         base_url="https://openrouter.ai/api/v1",
-        api_key=key,
-        streaming=streaming,
     )

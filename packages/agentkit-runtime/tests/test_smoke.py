@@ -140,14 +140,15 @@ def test_adapter_tools_count_and_names() -> None:
 
 
 def test_frontend_tools_count_and_names() -> None:
-    """build_frontend_tools returns 4 tools (one per frontend verb)."""
+    """build_frontend_tools returns 5 tools (4 frozen + 1 runtime extension)."""
     tools = build_frontend_tools()
-    assert len(tools) == 4
+    assert len(tools) == 5
     assert {t.name for t in tools} == {
         "add_component_to_dashboard",
         "update_component_in_dashboard",
         "manage_navigation_bar",
         "assign_tasks_to_agents",
+        "connect_nodes",  # runtime extension (not in core's frozen 4)
     }
 
 
