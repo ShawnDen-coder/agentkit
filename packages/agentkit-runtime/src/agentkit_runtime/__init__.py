@@ -9,6 +9,7 @@ drives the Option B core loop (backend-sync verbs) via ``create_agent`` and yiel
 
 from __future__ import annotations
 
+from agentkit_runtime.adapter_tools import build_adapter_tools
 from agentkit_runtime.messages import to_langchain_messages
 from agentkit_runtime.orchestrator import LanggraphOrchestrator
 from agentkit_runtime.tools import FrontendActionRequested
@@ -17,5 +18,6 @@ from agentkit_runtime.tools import FrontendActionRequested
 __all__ = [
     "FrontendActionRequested",
     "LanggraphOrchestrator",
+    "build_adapter_tools",
     "to_langchain_messages",
 ]
