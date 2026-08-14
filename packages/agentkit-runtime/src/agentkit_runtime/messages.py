@@ -1,23 +1,17 @@
-"""Map agentkit ``Message`` list → langchain ``BaseMessage`` list.
+"""Message conversion: agentkit ``Message`` → langchain ``BaseMessage``.
 
-Handles the orphan-``ToolMessage`` gap: the example frontends, on a frontend
-``FunctionCall`` round-trip resume, append only a ``role=tool`` Message (without a
-preceding ``role=assistant`` Message carrying ``tool_calls``). OpenAI/OpenRouter
-reject a ``tool`` message that doesn't follow an assistant message with ``tool_calls``,
-so this mapper synthesizes a minimal ``AIMessage(tool_calls=[...])`` before any orphan
-``role=tool`` Message. The wire contract is unchanged (``Message.role="assistant"`` is
-already in the contract — the frontends just don't send it).
+0.3.0: uses langchain's native ``convert_to_messages`` for the standard mapping.
+The orphan-``ToolMessage`` synthesis (M2) is retained only for 0.2.0-style
+``role=tool`` messages without ``tool_call_id`` — 0.3.0 messages that carry
+``tool_call_id`` go through ``convert_to_messages`` directly.
 """
 
 from __future__ import annotations
 
-import json
-
 from langchain_core.messages import AIMessage
 from langchain_core.messages import BaseMessage
-from langchain_core.messages import HumanMessage
-from langchain_core.messages import SystemMessage
 from langchain_core.messages import ToolMessage
+from langchain_core.messages import convert_to_messages
 
 from agentkit_protocol import Message
 
@@ -28,24 +22,17 @@ __all__ = ["to_langchain_messages"]
 def to_langchain_messages(messages: list[Message]) -> list[BaseMessage]:
     """Translate agentkit ``Message`` objects to langchain ``BaseMessage`` objects.
 
-    ``role=human`` → ``HumanMessage``, ``role=assistant`` → ``AIMessage``,
-    ``role=system`` → ``SystemMessage``, ``role=tool`` → ``ToolMessage``. An orphan
-    ``role=tool`` Message (no preceding assistant message with ``tool_calls``) gets a
-    synthesized ``AIMessage(tool_calls=[...])`` prepended so the message history is
-    valid for OpenAI-format providers.
+    Uses langchain's native ``convert_to_messages`` for messages with
+    ``tool_call_id`` (0.3.0+). For 0.2.0-style orphan ``role=tool`` messages
+    (no ``tool_call_id``), synthesizes a preceding ``AIMessage(tool_calls=[...])``
+    so the message history is valid for OpenAI-format providers.
     """
     out: list[BaseMessage] = []
     for i, msg in enumerate(messages):
-        if msg.role == "human":
-            out.append(HumanMessage(content=msg.content or ""))
-        elif msg.role == "assistant":
-            out.append(AIMessage(content=msg.content or ""))
-        elif msg.role == "system":
-            out.append(SystemMessage(content=msg.content or ""))
-        elif msg.role == "tool":
+        if msg.role == "tool" and not msg.tool_call_id:
+            # 0.2.0 backward-compat: orphan role=tool without tool_call_id.
             args = msg.data or {}
             call_id = f"call_{i}"
-            # Synthesize a preceding AIMessage(tool_calls=[...]) if missing.
             if not (out and isinstance(out[-1], AIMessage) and getattr(out[-1], "tool_calls", None)):
                 out.append(
                     AIMessage(
@@ -53,5 +40,7 @@ def to_langchain_messages(messages: list[Message]) -> list[BaseMessage]:
                         tool_calls=[{"id": call_id, "name": msg.name or "", "args": args}],
                     )
                 )
-            out.append(ToolMessage(content=json.dumps(args), tool_call_id=call_id))
+            out.append(ToolMessage(content=str(msg.data or ""), tool_call_id=call_id))
+        else:
+            out.append(convert_to_messages([msg.model_dump()])[0])
     return out

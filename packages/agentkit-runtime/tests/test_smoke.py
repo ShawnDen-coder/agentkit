@@ -1,15 +1,16 @@
 """Tests for agentkit-runtime (no real LLM call).
 
+0.3.0 stage 2+4: rewritten for the plugin-repositioned architecture.
+
 Covers:
   * ``LanggraphOrchestrator`` structurally satisfies the ``Orchestrator`` Protocol.
-  * ``verb_tools`` builds 11 tools with names + schemas functionally equivalent to the
-    frozen ``VerbSpec.input_schema``.
-  * A frontend-verb tool raises ``FrontendActionRequested`` (the stateless interrupt).
-  * End-to-end: a scripted fake model emitting a frontend-verb tool_call makes ``run()``
-    yield a ``CopilotFunctionCall`` (validates ``create_agent`` + ``astream_events`` +
-    exception propagation).
-  * End-to-end: a model that never stops calling tools hits ``recursion_limit`` and
-    ``run()`` yields a graceful "已达调用上限" chunk (``GraphRecursionError`` handling).
+  * ``build_adapter_tools`` builds 5 tools; ``build_frontend_tools`` builds 4.
+  * End-to-end: a scripted fake model emitting a frontend-verb tool_call makes
+    ``run()`` yield a ``CopilotFunctionCall`` (validates ``create_agent`` +
+    ``astream_events`` + ``interrupt()`` → ``on_tool_error`` mapping).
+  * End-to-end: multi-hop backend loop emits status events + suggestions.
+  * End-to-end: recursion limit yields a graceful chunk.
+  * system_prompt is baked into the graph.
 """
 
 from __future__ import annotations
@@ -18,17 +19,15 @@ import copy
 from typing import Any
 
 import agentkit_runtime
-from agentkit_runtime import FrontendActionRequested
 from agentkit_runtime import LanggraphOrchestrator
-from agentkit_runtime.tools import verb_tools
+from agentkit_runtime import build_adapter_tools
+from agentkit_runtime import build_frontend_tools
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.messages import SystemMessage
-from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import Field
 
-from agentkit_protocol import STANDARD_VERBS
 from agentkit_protocol import AdapterCapabilities
 from agentkit_protocol import Component
 from agentkit_protocol import ComponentData
@@ -113,62 +112,47 @@ def _request(content: str = "test") -> QueryRequest:
 
 
 def test_orchestrator_satisfies_protocol() -> None:
-    """LanggraphOrchestrator(structurally) satisfies the Orchestrator Protocol."""
+    """LanggraphOrchestrator structurally satisfies the Orchestrator Protocol."""
     orch = LanggraphOrchestrator(_FakeChatModel(responses=[]), _StubAdapter())
     assert isinstance(orch, Orchestrator)
 
 
 def test_imports() -> None:
-    """Package exports the expected public symbols."""
+    """Package exports the expected public symbols (0.3.0: no FrontendActionRequested)."""
     assert "LanggraphOrchestrator" in agentkit_runtime.__all__
-    assert "FrontendActionRequested" in agentkit_runtime.__all__
+    assert "build_adapter_tools" in agentkit_runtime.__all__
+    assert "build_frontend_tools" in agentkit_runtime.__all__
     assert "to_langchain_messages" in agentkit_runtime.__all__
+    assert "FrontendActionRequested" not in agentkit_runtime.__all__  # removed in 0.3.0
 
 
-def test_verb_tools_count_and_names() -> None:
-    """verb_tools builds one BaseTool per STANDARD_VERBS, with matching names."""
-    tools = verb_tools(_StubAdapter())
-    assert len(tools) == len(STANDARD_VERBS)
-    assert {t.name for t in tools} == {v.name for v in STANDARD_VERBS}
+def test_adapter_tools_count_and_names() -> None:
+    """build_adapter_tools returns 5 tools (7 backend verbs minus 2 stubs)."""
+    tools = build_adapter_tools(_StubAdapter())
+    assert len(tools) == 5
+    assert {t.name for t in tools} == {
+        "get_catalog",
+        "get_component_data",
+        "get_selection",
+        "get_semantic_model",
+        "refine_component",
+    }
 
 
-def test_verb_tools_schemas_functionally_equivalent() -> None:
-    """Derived OpenAI schema matches VerbSpec.input_schema on contract-bearing dimensions.
-
-    The derived schema is a superset (pydantic adds additive ``default``/
-    ``additionalProperties``/``items`` for optional/object/array fields). The frozen
-    ``VerbSpec.input_schema`` is the authoritative source; only these dimensions must match.
-    """
-    tools = {t.name: t for t in verb_tools(_StubAdapter())}
-    for spec in STANDARD_VERBS:
-        derived = convert_to_openai_tool(tools[spec.name])["function"]["parameters"]
-        frozen = spec.input_schema
-        # Same property names.
-        assert set(derived.get("properties", {})) == set(frozen.get("properties", {})), spec.name
-        # Same required set.
-        assert set(derived.get("required", [])) == set(frozen.get("required", [])), spec.name
-        # Same primitive type for each property (frozen is the subset; compare on its keys).
-        for prop, js in frozen.get("properties", {}).items():
-            assert derived["properties"][prop].get("type") == js.get("type"), f"{spec.name}.{prop}"
-
-
-async def test_frontend_verb_tool_raises_frontend_action_requested() -> None:
-    """Invoking a frontend-verb tool raises FrontendActionRequested (before any event)."""
-    tools = {t.name: t for t in verb_tools(_StubAdapter())}
-    tool = tools["add_component_to_dashboard"]
-    ctx = SessionContext(user_identity="t", workspace_id="w", trace_id="x")
-    config: dict[str, Any] = {"configurable": {"ctx": ctx}}
-    try:
-        await tool.ainvoke({"component_id": "sales-by-region"}, config=config)
-    except FrontendActionRequested as fc:
-        assert fc.name == "add_component_to_dashboard"
-        assert fc.arguments == {"component_id": "sales-by-region"}
-    else:
-        raise AssertionError("expected FrontendActionRequested")
+def test_frontend_tools_count_and_names() -> None:
+    """build_frontend_tools returns 4 tools (one per frontend verb)."""
+    tools = build_frontend_tools()
+    assert len(tools) == 4
+    assert {t.name for t in tools} == {
+        "add_component_to_dashboard",
+        "update_component_in_dashboard",
+        "manage_navigation_bar",
+        "assign_tasks_to_agents",
+    }
 
 
 async def test_orchestrator_frontend_verb_yields_function_call() -> None:
-    """A frontend-verb tool_call -> run() yields a CopilotFunctionCall and ends."""
+    """A frontend-verb tool_call -> interrupt() -> run() yields CopilotFunctionCall."""
     model = _FakeChatModel(
         responses=[
             AIMessage(
